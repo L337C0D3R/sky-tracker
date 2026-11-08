@@ -406,7 +406,7 @@ function draw(now) {
     if (s.name) {
       considerCenter(s, p, r);
       if (state.layers.starLabels && s.mag < (ar ? 2.0 : 2.4) + Math.log2(state.zoom) * 0.8) {
-        text(s.name, p[0] + r + 5, p[1] + 4, 'rgba(225,232,255,.8)', 11.5, 500);
+        text(s.ly ? `${s.name} · ${fmtDist(s, true)}` : s.name, p[0] + r + 5, p[1] + 4, 'rgba(225,232,255,.8)', 11.5, 500);
       }
     }
   }
@@ -420,7 +420,7 @@ function draw(now) {
     ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(Math.PI / 4);
     ctx.strokeStyle = AST_COLOR; ctx.lineWidth = 1.6; ctx.globalAlpha = a.alt < 0 ? 0.45 : 1;
     ctx.strokeRect(-4, -4, 8, 8); ctx.restore();
-    pill(a.name, p[0] + 9, p[1], AST_COLOR, a.alt < 0 ? 0.55 : 0.95, 11);
+    pill(`${a.name} · ${fmtDist(a, true)}`, p[0] + 9, p[1], AST_COLOR, a.alt < 0 ? 0.55 : 0.95, 11);
   }
   ctx.globalAlpha = 1;
 
@@ -446,7 +446,7 @@ function draw(now) {
         ctx.beginPath(); ctx.ellipse(p[0], p[1], r * 2.1, r * 0.7, -0.35, 0, 7); ctx.stroke();
       }
     }
-    pill(pl.name, p[0] + r + 7, p[1], col, pl.alt < 0 ? 0.6 : 1, 12.5, true);
+    pill(`${pl.name} · ${fmtDist(pl, true)}`, p[0] + r + 7, p[1], col, pl.alt < 0 ? 0.6 : 1, 12.5, true);
     ctx.globalAlpha = 1;
   }
 
@@ -497,7 +497,7 @@ function drawSatellites(zs) {
     if (state.layers.satLabels) {
       const nearC = Math.hypot(p[0] - state.W / 2, p[1] - state.H / 2) < 90;
       if (cls === 'station' || s === state.target || (!crowded && s.sunlit && cls !== 'starlink') || (nearC && !crowded) || state.zoom >= 6) {
-        pill(satName(s.name), p[0] + r + 6, p[1], col, s.sunlit ? 0.95 : 0.6, cls === 'station' ? 12 : 10.5, cls === 'station');
+        pill(`${satName(s.name)} · ${fmtDist(s, true)}`, p[0] + r + 6, p[1], col, s.sunlit ? 0.95 : 0.6, cls === 'station' ? 12 : 10.5, cls === 'station');
       }
     }
   }
@@ -728,11 +728,31 @@ function drawTape(heading) {
 
 // ---------------- HUD + target card ----------------
 function fmtTime(d) { return d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'; }
-function fmtDist(o) {
-  if (o.kind === 'satellite') return `${Math.round(o.range).toLocaleString()} km`;
-  if (o.name === 'Moon') return `${Math.round(o.dist * 149597870.7).toLocaleString()} km`;
-  if (o.kind === 'star' || o.dist == null) return '—';
-  return o.dist < 0.1 ? `${Math.round(o.dist * 149597870.7).toLocaleString()} km` : `${o.dist.toFixed(3)} AU`;
+const AU_KM = 149597870.7;
+const LIGHT_KM_S = 299792.458;
+// Distance from the observer. short = compact form for on-sky labels.
+function fmtDist(o, short = false) {
+  if (o.kind === 'satellite') return o.range == null ? '—' : `${Math.round(o.range).toLocaleString()} km`;
+  if (o.kind === 'star') {
+    if (!o.ly) return '—';
+    const v = o.ly < 100 ? o.ly.toFixed(1) : Math.round(o.ly).toLocaleString();
+    return short ? `${v} ly` : `${v} light-years`;
+  }
+  if (o.dist == null) return '—';
+  const km = o.dist * AU_KM;
+  if (km < 2e6) return `${Math.round(km).toLocaleString()} km`;
+  const m = km / 1e6;
+  const mtxt = m < 1000 ? `${m < 100 ? m.toFixed(1) : Math.round(m)}M km` : `${(m / 1000).toFixed(2)}B km`;
+  return short ? mtxt : `${mtxt.replace('M km', ' million km').replace('B km', ' billion km')} (${o.dist.toFixed(3)} AU)`;
+}
+function lightTime(o) {
+  if (o.kind === 'star') return o.ly ? `${o.ly < 100 ? o.ly.toFixed(1) : Math.round(o.ly).toLocaleString()} years` : '—';
+  const km = o.kind === 'satellite' ? o.range : o.dist * AU_KM;
+  const sec = km / LIGHT_KM_S;
+  if (sec < 1) return `${(sec * 1000).toFixed(1)} ms`;
+  if (sec < 120) return `${sec.toFixed(1)} s`;
+  if (sec < 7200) return `${(sec / 60).toFixed(1)} min`;
+  return `${(sec / 3600).toFixed(1)} h`;
 }
 
 let lastLive = 0;
@@ -760,8 +780,8 @@ function hud(date, now) {
   const c = state.center?.o;
   const ret = $('reticle');
   if (c && c !== state.target) {
-    const extra = c.kind === 'satellite' ? `${Math.round(c.range).toLocaleString()} km away · ${Math.round(c.height)} km up`
-      : c.kind === 'star' ? `Star · mag ${c.mag.toFixed(1)}` : c.type;
+    const extra = c.kind === 'satellite' ? `${fmtDist(c)} from you · ${Math.round(c.height)} km up`
+      : `${c.kind === 'star' ? 'Star' : c.type} · ${fmtDist(c, true)} from you`;
     ret.innerHTML = `<b>${escapeHtml(displayName(c))}</b> · <span class="muted">${escapeHtml(extra)}</span>`;
     ret.classList.remove('hidden');
   } else ret.classList.add('hidden');
@@ -782,7 +802,8 @@ function hud(date, now) {
     if (Math.abs(dAlt) > 1) parts.push(`${dAlt > 0 ? '↑ Tilt up' : '↓ Tilt down'} ${Math.abs(dAlt).toFixed(0)}°`);
     g.textContent = parts.join('   ') || `${sep.toFixed(1)}° away`;
   }
-  $('tQuick').innerHTML = `Az ${t.az.toFixed(1)}° ${cardinal(t.az)} · Alt <span class="${t.alt > 0 ? 'up' : 'down'}">${t.alt.toFixed(1)}°</span> · ${fmtDist(t)}`
+  $('tQuick').innerHTML = `Az ${t.az.toFixed(1)}° ${cardinal(t.az)} · Alt <span class="${t.alt > 0 ? 'up' : 'down'}">${t.alt.toFixed(1)}°</span> · <b>${fmtDist(t)}</b> away`
+    + (t.kind !== 'satellite' && t.kind !== 'star' ? ` · light ${lightTime(t)}` : '')
     + (t.kind === 'satellite' && t.rangeRate != null ? ` · ${t.rangeRate < 0 ? 'approaching' : 'receding'} ${Math.abs(t.rangeRate).toFixed(1)} km/s` : '');
 
   if (!$('tDetails').classList.contains('collapsed')) {
@@ -791,6 +812,10 @@ function hud(date, now) {
       ['Altitude', `<span class="${t.alt > 0 ? 'up' : 'down'}">${t.alt.toFixed(2)}°</span>`],
       ['Distance', fmtDist(t)],
     ];
+    if (t.kind === 'star' && t.ly) {
+      const yr = new Date().getFullYear() - Math.round(t.ly);
+      stats.push(['Light left it', yr > 0 ? `≈ ${yr} AD` : `≈ ${-yr + 1} BC`]);
+    } else if (t.kind !== 'star') stats.push(['Light time', lightTime(t)]);
     if (t.mag != null && Number.isFinite(t.mag)) stats.push(['Magnitude', t.mag.toFixed(1)]);
     if (t.kind === 'satellite') {
       const rr = t.rangeRate;
@@ -880,11 +905,11 @@ function renderList() {
   $('list').innerHTML = items.map((o, i) => {
     const col = colorOf(o);
     const sub = o.kind === 'satellite'
-      ? `${o.type} · ${Math.round(o.height || 0)} km up${o.alt > 0 ? (o.sunlit ? ' · sunlit' : ' · in shadow') : ''}`
-      : `${o.type}${o.mag != null && Number.isFinite(o.mag) ? ` · mag ${o.mag.toFixed(1)}` : ''}`;
+      ? `${fmtDist(o)} away · ${Math.round(o.height || 0)} km up${o.alt > 0 ? (o.sunlit ? ' · sunlit' : ' · in shadow') : ''}`
+      : `${o.type} · ${fmtDist(o, true)} away${o.mag != null && Number.isFinite(o.mag) ? ` · mag ${o.mag.toFixed(1)}` : ''}`;
     return `<li data-i="${i}"><span class="dot" style="background:${col};color:${col}"></span>
       <span class="nm"><b>${escapeHtml(displayName(o))}</b><span class="muted small">${escapeHtml(sub)}</span></span>
-      <span class="pos"><span class="${o.alt > 0 ? 'up' : 'down'}">${o.alt > 0 ? '▲' : '▼'} ${o.alt.toFixed(o.kind === 'satellite' ? 1 : 0)}°</span><br><span class="muted">${o.kind === 'satellite' && o.alt > 0 ? `${Math.round(o.range).toLocaleString()} km · ` : ''}${Math.round(o.az)}° ${cardinal(o.az)}</span></span></li>`;
+      <span class="pos"><span class="${o.alt > 0 ? 'up' : 'down'}">${o.alt > 0 ? '▲' : '▼'} ${o.alt.toFixed(o.kind === 'satellite' ? 1 : 0)}°</span><br><span class="muted">${Math.round(o.az)}° ${cardinal(o.az)}</span></span></li>`;
   }).join('') || `<li class="muted">${sky.satellites.length || filter !== 'overhead' ? 'Nothing matches.' : 'Loading satellites…'}</li>`;
   $('list').onclick = (ev) => {
     const li = ev.target.closest('li[data-i]');

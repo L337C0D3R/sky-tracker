@@ -42,11 +42,12 @@ export class Sky {
       fetch('data/constellations.json').then((r) => r.json()),
       fetch('data/asteroids.json').then((r) => r.json()),
     ]);
-    this.stars = stars.map(([ra, dec, mag, bv, name, con]) => ({
+    this.stars = stars.map(([ra, dec, mag, bv, ly, name, con]) => ({
       kind: 'star',
       type: 'Star',
       name: name || null,
       con,
+      ly: ly || null, // distance in light-years
       mag,
       bv,
       v: A.VectorFromSphere(new A.Spherical(dec, ra, 1), A.MakeTime(new Date())),

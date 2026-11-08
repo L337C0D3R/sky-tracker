@@ -1,5 +1,6 @@
 // Builds the static catalogues in public/data:
-//   stars.json          – HIP stars to mag 6 (d3-celestial, BSD-3) with proper names
+//   stars.json          – HIP stars to mag 6 (d3-celestial, BSD-3) with proper names and
+//                         distances in light-years (HYG database, CC BY-SA 4.0, from Hipparcos parallaxes)
 //   constellations.json – stick figures + label positions
 //   asteroids.json      – fallback orbital elements from JPL Horizons (live ones come from /api/asteroids)
 // Usage: node scripts/build-data.mjs [--skip-stars]
@@ -12,19 +13,31 @@ const get = async (f) => (await fetch(SRC + f)).json();
 const r = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
 
 if (!process.argv.includes('--skip-stars')) {
-  const [stars, names, lines, cons] = await Promise.all([
+  const [stars, names, lines, cons, hyg] = await Promise.all([
     get('stars.6.json'),
     get('starnames.json'),
     get('constellations.lines.json'),
     get('constellations.json'),
+    fetch('https://raw.githubusercontent.com/astronexus/HYG-Database/main/hyg/CURRENT/hygdata_v41.csv').then((r) => r.text()),
   ]);
+  // HIP id -> distance (light-years). HYG uses 100000 pc for "unknown".
+  const rows = hyg.split('\n');
+  const head = rows[0].replace(/"/g, '').split(',');
+  const iHip = head.indexOf('hip'), iDist = head.indexOf('dist');
+  const distLy = new Map();
+  for (const line of rows.slice(1)) {
+    const c = line.replace(/"/g, '').split(',');
+    const hip = c[iHip], pc = parseFloat(c[iDist]);
+    if (hip && pc > 0 && pc < 100000) distLy.set(hip, pc * 3.26156);
+  }
   const list = stars.features
     .filter((f) => f.properties.mag <= 6)
     .map((f) => {
       let [ra, dec] = f.geometry.coordinates;
       if (ra < 0) ra += 360;
       const n = names[f.id] || {};
-      const row = [r(ra, 4), r(dec, 4), r(f.properties.mag, 2), r(+f.properties.bv || 0.6, 2)];
+      const ly = distLy.get(String(f.id));
+      const row = [r(ra, 4), r(dec, 4), r(f.properties.mag, 2), r(+f.properties.bv || 0.6, 2), ly ? (ly < 100 ? r(ly, 1) : Math.round(ly)) : 0];
       if (n.name) row.push(n.name, n.c || '');
       return row;
     })
@@ -46,7 +59,7 @@ if (!process.argv.includes('--skip-stars')) {
     };
   });
   await writeFile(new URL('constellations.json', OUT), JSON.stringify(cl));
-  console.log(`stars: ${list.length}, constellations: ${cl.length}`);
+  console.log(`stars: ${list.length} (${list.filter((x) => x[4]).length} with distance), constellations: ${cl.length}`);
 }
 
 const ast = await fetchAll(new Date());
