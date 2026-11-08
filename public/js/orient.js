@@ -29,8 +29,11 @@ export class Orientation {
   async start() {
     const DOE = window.DeviceOrientationEvent;
     if (!DOE) throw new Error('No orientation sensor available');
-    window.addEventListener('deviceorientationabsolute', (e) => this._onEvt(e, true));
-    window.addEventListener('deviceorientation', (e) => this._onEvt(e, false));
+    if (!this.listening) {
+      this.listening = true;
+      window.addEventListener('deviceorientationabsolute', (e) => this._onEvt(e, true));
+      window.addEventListener('deviceorientation', (e) => this._onEvt(e, false));
+    }
     if (typeof DOE.requestPermission === 'function') {
       // iOS needs this (inside the tap). Some Chromium builds expose it too and may never resolve.
       const p = await Promise.race([
@@ -94,7 +97,7 @@ export class Orientation {
   }
 
   // Call once per frame. Returns the smoothed basis.
-  update() {
+  update(zoom = 1) {
     let target;
     if (this.mode === 'sensor' && this.raw) {
       target = { right: this._yaw(this.raw.right), up: this._yaw(this.raw.up), fwd: this._yaw(this.raw.fwd) };
@@ -103,7 +106,8 @@ export class Orientation {
     }
     if (!this.basis) this.basis = target;
     else {
-      const k = this.mode === 'sensor' ? 0.22 : 0.5;
+      // Heavier smoothing when zoomed in, so sensor jitter isn't magnified.
+      const k = this.mode === 'sensor' ? 0.22 / Math.sqrt(zoom) : 0.5;
       let fwd = norm(lerp(this.basis.fwd, target.fwd, k));
       let up = lerp(this.basis.up, target.up, k);
       up = norm(up.map((x, i) => x - dot(up, fwd) * fwd[i]));

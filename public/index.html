@@ -5,10 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
   <title>SkyTracker AR</title>
   <meta name="description" content="Point your phone at the sky to find planets, stars, satellites and asteroids in real time." />
-  <meta name="theme-color" content="#05070f" />
+  <meta name="theme-color" content="#04060d" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/app.css" />
 </head>
 <body>
@@ -17,104 +20,133 @@
 
   <!-- HUD -->
   <header id="hud" class="hidden">
-    <div class="hud-left">
-      <div id="heading" class="big">—</div>
-      <div id="sub" class="muted small">—</div>
+    <div class="hud-row">
+      <div class="hud-heading">
+        <div id="heading" class="mono-big">—</div>
+        <div id="sub" class="hud-sub">—</div>
+      </div>
+      <div class="hud-right">
+        <div id="clock" class="hud-clock"></div>
+        <button id="locChip" class="chip"><span id="locDot" class="dot-status"></span><span id="loc">locating…</span></button>
+      </div>
     </div>
-    <div class="hud-right">
-      <div id="clock" class="small"></div>
-      <div id="loc" class="muted small">locating…</div>
-    </div>
+    <canvas id="tape" aria-hidden="true"></canvas>
+    <button id="liveChip" class="chip live-chip"><span class="pulse"></span><span id="liveText">Loading satellites…</span></button>
   </header>
-  <div id="crosshair" class="hidden"></div>
 
-  <div id="toolbar" class="hidden">
-    <button id="btnSearch" title="Find object" aria-label="Find object">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Find</span></button>
-    <button id="btnMode" title="Switch AR / sky map" aria-label="Switch mode">
-      <svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M8 7l2-3h4l2 3"/></svg><span id="modeLabel">AR</span></button>
-    <button id="btnCal" title="Calibrate compass" aria-label="Calibrate">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg><span>Align</span></button>
-    <button id="btnSettings" title="Layers & settings" aria-label="Settings">
-      <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg><span>Layers</span></button>
+  <div id="crosshair" class="hidden"><i></i><i></i><i></i><i></i></div>
+  <div id="reticle" class="hidden"></div>
+
+  <div id="zoomCtl" class="hidden">
+    <button id="zIn" aria-label="Zoom in">+</button>
+    <button id="zoomVal" aria-label="Reset zoom">1×</button>
+    <button id="zOut" aria-label="Zoom out">−</button>
   </div>
+
+  <button id="btnSensors" class="pill-btn hidden">Enable compass &amp; motion</button>
+  <div id="camBanner" class="hidden"><span id="camMsg"></span><button id="camRetry">Retry camera</button></div>
+
+  <nav id="toolbar" class="hidden">
+    <button id="btnSearch" aria-label="Find object">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span>Find</span></button>
+    <button id="btnMode" aria-label="Switch camera / sky map">
+      <svg id="icoMode" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="modeLabel">Sky map</span></button>
+    <button id="btnCal" aria-label="Calibrate compass">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg><span>Align</span></button>
+    <button id="btnSettings" aria-label="Layers and settings">
+      <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg><span>Layers</span></button>
+  </nav>
 
   <!-- Target card -->
   <section id="target" class="card hidden">
-    <div class="row">
-      <div>
-        <div id="tName" class="big"></div>
-        <div id="tType" class="muted small"></div>
+    <div class="t-head">
+      <span id="tIcon" class="t-icon"></span>
+      <div class="t-title">
+        <div id="tName"></div>
+        <div id="tType"></div>
       </div>
+      <button id="tMore" class="icon" aria-label="Details">▾</button>
       <button id="tClose" class="icon" aria-label="Clear target">✕</button>
     </div>
     <div id="tGuide" class="guide"></div>
-    <div id="tStats" class="stats"></div>
-    <div id="tExtra" class="muted small"></div>
-    <div class="row gap">
-      <button id="tGoto" class="ghost hidden">Center view</button>
-      <button id="tAlign" class="ghost">It's centred — align compass</button>
+    <div id="tQuick" class="quick"></div>
+    <div id="tDetails" class="collapsed">
+      <div id="tStats" class="stats"></div>
+      <div id="tExtra" class="extra"></div>
+      <div class="row gap">
+        <button id="tGoto" class="ghost hidden">Center view</button>
+        <button id="tAlign" class="ghost">It's centred: align compass</button>
+      </div>
     </div>
   </section>
 
   <!-- Search panel -->
   <section id="search" class="sheet hidden">
+    <div class="grab"></div>
     <div class="sheet-head">
-      <input id="q" type="search" placeholder="Search Jupiter, ISS, Sirius, Vesta…" autocomplete="off" />
+      <input id="q" type="search" placeholder="Search ISS, Starlink, Jupiter, Sirius…" autocomplete="off" />
       <button id="sClose" class="icon" aria-label="Close">✕</button>
     </div>
     <div id="chips" class="chips">
-      <button data-f="up" class="on">Above horizon</button>
-      <button data-f="all">All</button>
+      <button data-f="overhead" class="on">🛰 Overhead now</button>
+      <button data-f="up">Visible now</button>
       <button data-f="planet">Planets</button>
-      <button data-f="overhead">Satellites overhead now</button>
       <button data-f="satellite">All satellites</button>
       <button data-f="asteroid">Asteroids</button>
       <button data-f="star">Stars</button>
+      <button data-f="all">Everything</button>
     </div>
     <ul id="list"></ul>
   </section>
 
   <!-- Settings -->
   <section id="settings" class="sheet hidden">
-    <div class="sheet-head"><h2>Layers & settings</h2><button id="setClose" class="icon" aria-label="Close">✕</button></div>
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Layers &amp; settings</h2><button id="setClose" class="icon" aria-label="Close">✕</button></div>
     <div class="set-body">
       <h3>Show</h3>
-      <label><input type="checkbox" data-layer="constellations" checked /> Constellation lines</label>
-      <label><input type="checkbox" data-layer="starLabels" checked /> Star names</label>
-      <label><input type="checkbox" data-layer="grid" /> Alt/az grid</label>
-      <label><input type="checkbox" data-layer="satLabels" checked /> Satellite names</label>
-      <h3>Satellite groups <span class="muted small">(live TLEs, CelesTrak)</span></h3>
-      <label><input type="checkbox" data-sat="stations" checked /> Space stations</label>
-      <label><input type="checkbox" data-sat="visual" checked /> Brightest satellites</label>
-      <label><input type="checkbox" data-sat="weather" /> Weather</label>
-      <label><input type="checkbox" data-sat="science" /> Science</label>
-      <label><input type="checkbox" data-sat="amateur" /> Amateur radio</label>
-      <label><input type="checkbox" data-sat="gnss" /> GPS / GNSS</label>
-      <label><input type="checkbox" data-sat="starlink" /> Starlink <span class="muted small">(~10k, heavy)</span></label>
+      <label class="tog"><span>Satellite trails</span><input type="checkbox" data-layer="trails" /></label>
+      <label class="tog"><span>Satellite names</span><input type="checkbox" data-layer="satLabels" /></label>
+      <label class="tog"><span>Constellation lines</span><input type="checkbox" data-layer="constellations" /></label>
+      <label class="tog"><span>Star names</span><input type="checkbox" data-layer="starLabels" /></label>
+      <label class="tog"><span>Alt/az grid</span><input type="checkbox" data-layer="grid" /></label>
+      <h3>Live satellites <span class="muted small">CelesTrak TLEs</span></h3>
+      <label class="tog"><span>Space stations <em>ISS, Tiangong</em></span><input type="checkbox" data-sat="stations" /></label>
+      <label class="tog"><span>Starlink <em>~10,000 satellites</em></span><input type="checkbox" data-sat="starlink" /></label>
+      <label class="tog"><span>Brightest satellites</span><input type="checkbox" data-sat="visual" /></label>
+      <label class="tog"><span>Weather</span><input type="checkbox" data-sat="weather" /></label>
+      <label class="tog"><span>Science</span><input type="checkbox" data-sat="science" /></label>
+      <label class="tog"><span>Amateur radio</span><input type="checkbox" data-sat="amateur" /></label>
+      <label class="tog"><span>GPS / GNSS</span><input type="checkbox" data-sat="gnss" /></label>
       <div id="satStatus" class="muted small"></div>
       <h3>Camera</h3>
-      <label class="range">Field of view <input id="fov" type="range" min="35" max="100" step="1" /> <span id="fovVal"></span>°</label>
-      <p class="muted small">If labels drift away from objects near the screen edges, adjust until they line up.</p>
+      <label class="range"><span>Lens field of view</span><input id="fov" type="range" min="35" max="100" step="1" /><b id="fovVal"></b></label>
+      <p class="muted small">If labels drift away from real objects near the screen edges, adjust this until they line up.</p>
       <h3>Compass</h3>
-      <label class="range">Heading offset <input id="yaw" type="range" min="-180" max="180" step="0.5" /> <span id="yawVal"></span>°</label>
+      <label class="range"><span>Heading offset</span><input id="yaw" type="range" min="-180" max="180" step="0.5" /><b id="yawVal"></b></label>
       <button id="calReset" class="ghost">Reset calibration</button>
       <h3>Location</h3>
       <div class="row gap"><input id="lat" inputmode="decimal" placeholder="Latitude" /><input id="lon" inputmode="decimal" placeholder="Longitude" /></div>
       <div class="row gap"><button id="locSet" class="ghost">Use these</button><button id="locGps" class="ghost">Use GPS</button></div>
-      <p class="muted small" id="about">Positions: planets/Moon/Sun via Astronomy Engine (VSOP87, ±1″), asteroids from today's NASA/JPL Horizons elements, satellites by SGP4 from CelesTrak TLEs, stars from Hipparcos. Pointing accuracy is limited by your phone's compass (typically ±5–10°); tap <b>Align</b> on a known object to fix it.</p>
+      <p class="muted small about">Planets, Sun and Moon: Astronomy Engine (VSOP87, ±1″). Asteroids: today's NASA/JPL Horizons elements. Satellites: SGP4 on CelesTrak TLEs, recomputed every frame. Stars: Hipparcos. Pointing accuracy depends on your phone's compass (typically ±5–10°); tap <b>Align</b> on a known object to correct it.</p>
     </div>
   </section>
 
   <!-- Splash -->
   <section id="splash">
+    <canvas id="stars"></canvas>
     <div class="splash-inner">
-      <svg class="logo" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#0b1430" stroke="#4a7dff" stroke-width="2"/><circle cx="22" cy="24" r="2" fill="#fff"/><circle cx="44" cy="18" r="1.4" fill="#fff"/><circle cx="40" cy="40" r="7" fill="#f0c27b"/><ellipse cx="40" cy="40" rx="12" ry="3" fill="none" stroke="#f0d9a8" stroke-width="1.4" transform="rotate(-20 40 40)"/><circle cx="18" cy="44" r="1.2" fill="#9fe3ec"/></svg>
-      <h1>SkyTracker AR</h1>
-      <p>Point your phone at the sky. Find planets, stars, satellites and asteroids using their live positions.</p>
-      <button id="startAR" class="primary">Start AR camera</button>
-      <button id="startMap" class="ghost">Explore sky map</button>
-      <p id="splashMsg" class="muted small">Needs camera, motion sensors and location. Nothing leaves your device.</p>
+      <svg class="logo" viewBox="0 0 64 64"><defs><radialGradient id="pg" cx=".35" cy=".35"><stop offset="0" stop-color="#ffe2a8"/><stop offset="1" stop-color="#d58b3c"/></radialGradient></defs><circle cx="32" cy="32" r="13" fill="url(#pg)"/><ellipse cx="32" cy="32" rx="25" ry="7" fill="none" stroke="#ffd9a0" stroke-width="2" transform="rotate(-20 32 32)"/><circle cx="52" cy="14" r="2.4" fill="#7ef0cf"/></svg>
+      <h1>SkyTracker<span>AR</span></h1>
+      <p class="lead">Point your phone at the sky. See every planet, star, asteroid and satellite, including the ISS and Starlink, moving live.</p>
+      <ul class="feats">
+        <li><b>10,000+</b> live satellites</li>
+        <li><b>±1″</b> planet accuracy</li>
+        <li><b>NASA/JPL</b> asteroid orbits</li>
+      </ul>
+      <button id="startAR" class="primary">Open camera</button>
+      <button id="startMap" class="link">Use sky map without camera</button>
+      <p id="splashMsg" class="muted small">Uses your camera, motion sensors and location. Nothing leaves your device.</p>
     </div>
   </section>
 
