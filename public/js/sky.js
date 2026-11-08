@@ -303,6 +303,45 @@ export class Sky {
     } else if (o.kind === 'satellite') this.updateFast(date, [o]);
   }
 
+  // Path across *your* sky. Satellites: −5 → +10 min (10 s steps).
+  // Everything else: −6 h → +12 h (10 min steps), i.e. its daily arc incl. rise/set.
+  trajectory(o, date) {
+    const t0 = date.getTime();
+    const pts = [];
+    if (o.kind === 'satellite') {
+      const tmp = { satrec: o.satrec };
+      for (let dt = -300; dt <= 600; dt += 10) {
+        const d = new Date(t0 + dt * 1000);
+        this.updateFast(d, [tmp]);
+        if (tmp.dead) break;
+        pts.push({ t: d, e: tmp.e, alt: tmp.alt });
+      }
+      return { pts, tick: 60000, kind: 'sat' };
+    }
+    const step = 10 * 60000;
+    const start = Math.floor((t0 - 6 * 3600000) / step) * step;
+    const earthCache = new Map();
+    for (let tm = start; tm <= t0 + 12 * 3600000; tm += step) {
+      const d = new Date(tm);
+      const t = A.MakeTime(d);
+      let az, alt;
+      if (o.kind === 'planet') {
+        const h = this._planet(o.body, t);
+        az = h.az; alt = h.alt;
+      } else if (o.kind === 'star') {
+        const tmp = { v: o.v };
+        this._star(tmp, A.Rotation_EQJ_HOR(t, this.observer));
+        az = tmp.az; alt = tmp.alt;
+      } else if (o.kind === 'asteroid') {
+        const tmp = { el: o.el };
+        this._asteroid(tmp, t, A.HelioVector(A.Body.Earth, t), A.ObserverVector(t, this.observer, false), A.Rotation_EQJ_HOR(t, this.observer));
+        az = tmp.az; alt = tmp.alt;
+      } else continue;
+      pts.push({ t: d, e: enu(az, alt), alt });
+    }
+    return { pts, tick: 3600000, kind: 'day' };
+  }
+
   // ---------- Details ----------
   // Extra live facts for Sun / Moon / planets.
   bodyInfo(obj, date) {

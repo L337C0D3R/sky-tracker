@@ -48,6 +48,7 @@
 
   <div id="crosshair" class="hidden"><i></i><i></i><i></i><i></i></div>
   <div id="reticle" class="hidden"></div>
+  <div id="hoverTip" class="hidden"></div>
 
   <button id="camBtn" class="hidden" aria-label="Night camera settings">
     <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg><span>Night</span>
@@ -165,6 +166,7 @@
     <div class="sheet-head"><h2>Layers &amp; settings</h2><button id="setClose" class="icon" aria-label="Close">✕</button></div>
     <div class="set-body">
       <h3>Show</h3>
+      <label class="tog"><span>Trajectories <em>selected &amp; hovered object</em></span><input type="checkbox" data-layer="paths" /></label>
       <label class="tog"><span>Satellite trails</span><input type="checkbox" data-layer="trails" /></label>
       <label class="tog"><span>Satellite names</span><input type="checkbox" data-layer="satLabels" /></label>
       <label class="tog"><span>Constellation lines</span><input type="checkbox" data-layer="constellations" /></label>

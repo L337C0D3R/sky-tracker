@@ -262,3 +262,7 @@ body.red { --accent: #b3261e; --accent-2: #ff5a4d; --good: #ff6b5e; }
 
 .d-stamp { margin-left: auto; font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); letter-spacing: 0; text-transform: none; }
 #dLive .d-grid b { font-variant-numeric: tabular-nums; }
+
+#hoverTip { position: fixed; z-index: 3; pointer-events: none; max-width: 240px; padding: 6px 10px; border-radius: 10px;
+  background: var(--glass-strong); border: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; }
+#hoverTip b { font-weight: 650; }

@@ -28,7 +28,7 @@ const video = $('cam');
 const state = {
   mode: 'map', // 'ar' (camera) | 'map'
   target: null,
-  layers: { constellations: true, starLabels: true, grid: false, satLabels: true, trails: true, ...load('layers', {}) },
+  layers: { constellations: true, starLabels: true, grid: false, satLabels: true, trails: true, paths: true, ...load('layers', {}) },
   satGroups: load('satGroups.v2', DEFAULT_GROUPS),
   zoom: 1,
   lastSlow: -1e9,
@@ -473,6 +473,7 @@ function frame(now) {
   if (state.mode === 'ar') camctl.frame(now);
   state.center = null;
   draw(now);
+  state.lastCenter = state.center?.o || null;
   hud(date, now);
 }
 
@@ -545,6 +546,13 @@ function draw(now) {
   drawGround(ar);
   if (state.layers.grid) drawGrid();
   if (state.layers.constellations) drawConstellations(ar);
+
+  // Paths: the selected target, plus whatever is hovered (mouse) or under the crosshair.
+  if (state.layers.paths !== false) {
+    const hov = state.mouseHover || state.lastCenter;
+    if (state.target) drawTrajectory(state.target, true);
+    if (hov && hov !== state.target) drawTrajectory(hov, false);
+  }
 
   // Stars (catalogue sorted bright → faint)
   const magLimit = clamp((ar ? 4.2 : 4.6) + Math.log2(state.zoom) * 0.9, 3.5, 6);
@@ -791,7 +799,6 @@ function drawTarget(now) {
       ctx.lineTo(p[0] + Math.cos(a) * (pulse + 11), p[1] + Math.sin(a) * (pulse + 11));
       ctx.stroke();
     }
-    if (t.kind === 'satellite') drawSatTrack(t);
   } else {
     let ang = Math.atan2(-y, x);
     if (z < 0 && Math.hypot(x, y) < 0.05) ang = -Math.PI / 2;
@@ -815,26 +822,97 @@ function drawTarget(now) {
   }
 }
 
-function drawSatTrack(s) {
-  if (!s._trackAt || performance.now() - s._trackAt > 2000) {
-    s._track = trackPoints(s);
-    s._trackAt = performance.now();
+// ---------------- Trajectories ----------------
+function getTraj(o) {
+  const ttl = o.kind === 'satellite' ? 2000 : 30000;
+  if (!o._traj || performance.now() - o._trajAt > ttl) {
+    o._traj = sky.trajectory(o, new Date());
+    o._trajAt = performance.now();
   }
-  ctx.strokeStyle = 'rgba(126,240,207,.5)'; ctx.setLineDash([4, 6]); ctx.lineWidth = 1.5;
-  polyline(s._track);
-  ctx.setLineDash([]);
+  return o._traj;
 }
+const hhmm = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-// Predicted path ±3 min.
-function trackPoints(s) {
-  const out = [];
-  const t0 = Date.now();
-  const tmp = { satrec: s.satrec };
-  for (let dt = -180; dt <= 180; dt += 10) {
-    sky.updateFast(new Date(t0 + dt * 1000), [tmp]);
-    out.push(tmp.e);
+// Draws an object's path across your sky: past = solid & faded, future = dashed,
+// below-horizon parts dimmed; time ticks, rise/set labels and a direction arrow.
+function drawTrajectory(o, strong) {
+  const tr = getTraj(o);
+  if (tr.pts.length < 2) return;
+  const col = colorOf(o);
+  const nowMs = Date.now();
+  const maxJump = Math.max(state.W, state.H) * 1.5;
+  const P = tr.pts.map((pt) => project(pt.e));
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = col;
+  for (let i = 1; i < tr.pts.length; i++) {
+    const a = P[i - 1], b = P[i];
+    if (!a || !b || Math.hypot(b[0] - a[0], b[1] - a[1]) > maxJump) continue;
+    const pt = tr.pts[i], pa = tr.pts[i - 1];
+    const future = pt.t.getTime() > nowMs;
+    const below = pt.alt < 0 && pa.alt < 0;
+    ctx.globalAlpha = (below ? 0.28 : 0.9) * (future ? 1 : 0.5) * (strong ? 1 : 0.85);
+    ctx.lineWidth = strong ? 2.2 : 1.7;
+    ctx.setLineDash(future ? [7, 6] : []);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   }
-  return out;
+  ctx.setLineDash([]);
+
+  // Time ticks
+  const labels = [];
+  const canLabel = (p) => onScreen(p, -10) && labels.every((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) > 46);
+  tr.pts.forEach((pt, i) => {
+    const p = P[i];
+    if (!p) return;
+    const tms = pt.t.getTime();
+    let label = null;
+    if (tr.kind === 'sat') {
+      const k = Math.round((tms - nowMs) / 60000);
+      if (i % 6 !== 0 || k === 0) return;
+      label = `${k > 0 ? '+' : '−'}${Math.abs(k)} min`;
+    } else {
+      if (pt.t.getMinutes() !== 0) return;
+      label = hhmm(pt.t);
+    }
+    ctx.globalAlpha = pt.alt < 0 ? 0.35 : 0.95;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(p[0], p[1], strong ? 3 : 2.5, 0, 7); ctx.fill();
+    if (canLabel(p)) { labels.push(p); text(label, p[0] + 6, p[1] - 6, col, 10.5, 600); }
+  });
+
+  // Rise / set where the path crosses the horizon
+  for (let i = 1; i < tr.pts.length; i++) {
+    const a = tr.pts[i - 1], b = tr.pts[i];
+    if ((a.alt < 0) === (b.alt < 0)) continue;
+    const f = a.alt / (a.alt - b.alt);
+    const e = a.e.map((v, k) => v + (b.e[k] - v) * f);
+    const p = project(e);
+    if (!onScreen(p, -10)) continue;
+    const when = new Date(a.t.getTime() + (b.t.getTime() - a.t.getTime()) * f);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, 7); ctx.fill();
+    pill(`${b.alt > a.alt ? 'Rises' : 'Sets'} ${hhmm(when)}`, p[0] + 7, p[1] - 14, col, 0.95, 10.5, true);
+    labels.push(p);
+  }
+
+  // Direction-of-motion arrow just ahead of "now"
+  const iNow = tr.pts.findIndex((pt) => pt.t.getTime() > nowMs);
+  if (iNow > 0 && iNow + 1 < tr.pts.length) {
+    const a = project(o.e), b = P[Math.min(tr.pts.length - 1, iNow + (tr.kind === 'sat' ? 2 : 1))];
+    if (a && b && onScreen(a) && Math.hypot(b[0] - a[0], b[1] - a[1]) > 4) {
+      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const r = 16;
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = col;
+      ctx.save();
+      ctx.translate(a[0] + Math.cos(ang) * r, a[1] + Math.sin(ang) * r);
+      ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(-4, -5); ctx.lineTo(-4, 5); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.restore();
 }
 
 // ---------------- Compass tape ----------------
@@ -1202,6 +1280,7 @@ function bindUI() {
     }
   });
   canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'mouse' && pointers.size === 0) updateHover(e.clientX, e.clientY);
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     if (pointers.size === 2 && pinch0) {
@@ -1224,6 +1303,7 @@ function bindUI() {
     if (pointers.size === 0) dragStart = null;
   };
   canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointerleave', () => updateHover(null));
   canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); dragStart = null; pinch0 = null; });
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); setZoom(state.zoom * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
   addEventListener('keydown', (e) => {
@@ -1240,8 +1320,9 @@ function bindUI() {
   });
 }
 
-function pick(x, y) {
-  let best = null, bd = 30;
+function nearestAt(x, y, radius = 30) {
+  if (!B) return null;
+  let best = null, bd = radius;
   const cands = [...sky.planets, ...sky.asteroids, ...sat.vis.filter((s) => s.alt > 0 && !s.dead), ...sky.stars.filter((s) => s.name && s.mag < 5)];
   for (const o of cands) {
     const p = project(o.e);
@@ -1249,12 +1330,31 @@ function pick(x, y) {
     const d = Math.hypot(p[0] - x, p[1] - y) - (o.kind === 'planet' ? 6 : 0);
     if (d < bd) { bd = d; best = o; }
   }
+  return best;
+}
+
+function pick(x, y) {
+  const best = nearestAt(x, y);
   if (best) {
     selectTarget(best, false);
     $('search').classList.add('hidden');
     $('settings').classList.add('hidden');
     openDetails(best);
   }
+}
+
+// Desktop: hovering an object shows its path and a small tooltip.
+function updateHover(x, y) {
+  const tip = $('hoverTip');
+  const o = x == null ? null : nearestAt(x, y, 22);
+  state.mouseHover = o;
+  canvas.style.cursor = o ? 'pointer' : '';
+  if (!o) { tip.classList.add('hidden'); return; }
+  const tr = o.kind === 'satellite' ? 'path: 5 min ago → 10 min ahead' : 'path: daily arc, hour marks';
+  tip.innerHTML = `<b>${escapeHtml(displayName(o))}</b> · ${escapeHtml(fmtDist(o, true))}<br><span class="muted">${tr} · click for details</span>`;
+  tip.style.left = `${Math.min(x + 14, state.W - 240)}px`;
+  tip.style.top = `${Math.max(8, y - 50)}px`;
+  tip.classList.remove('hidden');
 }
 
 function alignOn(t) {
