@@ -153,6 +153,8 @@ function openIcs(ics, filename) {
 let deps;
 let current = null;
 let token = 0;
+// Live-panel state for the open object
+let live = { info: null, passes: null, passesAt: 0, prev: null, rr: null, angSpeed: null, lastTick: 0 };
 
 export function initDetails(d) {
   deps = d;
@@ -162,6 +164,7 @@ export function initDetails(d) {
 }
 
 export function isOpen() { return !$('details').classList.contains('hidden'); }
+export function currentObject() { return isOpen() ? current : null; }
 export function closeDetails() { $('details').classList.add('hidden'); current = null; }
 
 function grid(rows) {
@@ -180,6 +183,7 @@ export function openDetails(o) {
   if (!o) return;
   current = o;
   const my = ++token;
+  live = { info: null, passes: null, passesAt: 0, prev: null, rr: null, angSpeed: null, lastTick: 0 };
   const { sky, displayName, colorOf, cardinal } = deps;
   const col = colorOf(o);
   $('dIcon').style.background = col;
@@ -194,6 +198,7 @@ export function openDetails(o) {
   if (o.kind === 'planet') {
     const f = PLANET_FACTS[o.name] || {};
     const info = sky.bodyInfo(o, now);
+    live.info = info;
     html += section('Tonight', grid([
       ['Rises', t2(info.rise)], ['Highest', info.transit ? `${t2(info.transit)} · ${info.transitAlt.toFixed(0)}° up` : null], ['Sets', t2(info.set)],
       ['In constellation', esc(info.constellation)], ['Apparent size', info.angularDiam ? (info.angularDiam > 120 ? `${(info.angularDiam / 60).toFixed(1)}′` : `${info.angularDiam.toFixed(1)}″`) : null],
@@ -255,9 +260,11 @@ export function openDetails(o) {
 
   // Async parts
   if (o.kind === 'satellite') {
-    setTimeout(() => {
-      if (my !== token) return;
+    const renderPasses = () => {
+      if (my !== token || !isOpen()) return;
       const ps = sky.passes(o, new Date(), 72, 6);
+      live.passes = ps;
+      live.passesAt = Date.now();
       $('dPasses').classList.remove('d-loading');
       $('dPasses').innerHTML = ps.length ? `<ul class="passes">${ps.map((p) => `
         <li class="${p.visible ? 'vis' : ''}">
@@ -274,7 +281,9 @@ export function openDetails(o) {
         const name = deps.displayName(o);
         openIcs(passIcs(o, p, name, sky.observer, deps.linkFor(o)), `${name.replace(/[^\w]+/g, '-')}-pass.ics`);
       };
-    }, 30);
+    };
+    live.renderPasses = renderPasses;
+    setTimeout(renderPasses, 30);
     satcat(o.norad).then((c) => {
       if (my !== token || !c) return;
       const rcs = c.RCS ? (c.RCS < 0.1 ? 'Small (< 0.1 m²)' : c.RCS < 1 ? 'Medium (0.1–1 m²)' : `Large (${c.RCS.toFixed(1)} m² radar size)`) : null;
@@ -301,28 +310,83 @@ export function openDetails(o) {
   }
 }
 
-// Called by the main loop ~2×/s while the sheet is open.
-export function updateLive() {
+// ---------------- Live panel ----------------
+const AU_KM = 149597870.7;
+function countdown(ms) {
+  if (ms < 0) ms = 0;
+  const t = Math.floor(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}s` : `${m}m ${String(sec).padStart(2, '0')}s`;
+}
+const fix = (x, d) => Number(x).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+
+// Called every animation frame by the main loop; redraws ~10×/s (satellites) or 4×/s (others).
+export function liveTick(date) {
   const o = current;
   if (!o || !isOpen()) return;
-  const { fmtDist, lightTime, cardinal } = deps;
+  const nowMs = date.getTime();
+  const sat = o.kind === 'satellite';
+  if (nowMs - live.lastTick < (sat ? 100 : 250)) return;
+  live.lastTick = nowMs;
+  deps.sky.updateOne(o, date);
+
+  // Rates from successive samples: range rate (non-satellites) and motion across the sky.
+  const distKm = sat ? o.range : o.kind === 'star' ? null : o.dist * AU_KM;
+  if (live.prev) {
+    const dt = (nowMs - live.prev.t) / 1000;
+    if (dt > 0.05) {
+      const p = live.prev.e, e = o.e;
+      const ang = Math.acos(Math.max(-1, Math.min(1, p[0] * e[0] + p[1] * e[1] + p[2] * e[2]))) * 180 / Math.PI;
+      live.angSpeed = live.angSpeed == null ? ang / dt : live.angSpeed + (ang / dt - live.angSpeed) * 0.3;
+      if (distKm != null && live.prev.d != null && !sat) {
+        const rr = (distKm - live.prev.d) / dt;
+        live.rr = live.rr == null ? rr : live.rr + (rr - live.rr) * 0.3;
+      }
+    }
+  }
+  live.prev = { t: nowMs, e: o.e, d: distKm };
+  if (sat && live.passesAt && nowMs - live.passesAt > 60000) live.renderPasses?.();
+
+  const { lightTime, cardinal } = deps;
   const rows = [
-    ['Direction', `${o.az.toFixed(1)}° ${cardinal(o.az)}`],
-    ['Altitude', `<span class="${o.alt > 0 ? 'up' : 'down'}">${o.alt.toFixed(1)}°${o.alt > 0 ? '' : ' (below horizon)'}</span>`],
-    ['Distance from you', fmtDist(o)],
+    ['Direction', `${fix(o.az, 3)}° ${cardinal(o.az)}`],
+    ['Altitude', `<span class="${o.alt > 0 ? 'up' : 'down'}">${fix(o.alt, 3)}°${o.alt > 0 ? '' : ' (below horizon)'}</span>`],
   ];
-  if (o.kind === 'satellite') {
+  if (sat) rows.push(['Distance from you', `${fix(o.range, 1)} km`]);
+  else if (o.kind === 'star') rows.push(['Distance from you', deps.fmtDist(o)]);
+  else rows.push(['Distance from you', `${fix(distKm, 0)} km`], ['In AU', fix(o.dist, 6)]);
+
+  const rr = sat ? o.rangeRate : live.rr;
+  if (rr != null) rows.push([rr < 0 ? 'Approaching at' : 'Moving away at', `<span class="${rr < 0 ? 'up' : 'down'}">${fix(Math.abs(rr), 3)} km/s</span>`]);
+  if (live.angSpeed != null) {
+    rows.push(['Moving across sky', live.angSpeed >= 0.05 ? `${fix(live.angSpeed, 3)}°/s` : `${fix(live.angSpeed * 60, 3)}°/min`]);
+  }
+  if (sat) {
     rows.push(
-      ['Height', `${num(o.height)} km`],
-      ['Speed', `${o.speed?.toFixed(2)} km/s`],
-      ['Range rate', o.rangeRate == null ? '—' : `<span class="${o.rangeRate < 0 ? 'up' : 'down'}">${o.rangeRate < 0 ? 'Approaching' : 'Receding'} ${Math.abs(o.rangeRate).toFixed(2)} km/s</span>`],
-      ['Over', `${Math.abs(o.lat).toFixed(2)}°${o.lat >= 0 ? 'N' : 'S'}, ${Math.abs(o.lon).toFixed(2)}°${o.lon >= 0 ? 'E' : 'W'}`],
+      ['Height', `${fix(o.height, 2)} km`],
+      ['Speed', `${fix(o.speed, 3)} km/s · ${num(o.speed * 3600)} km/h`],
+      ['Over', `${fix(Math.abs(o.lat), 3)}°${o.lat >= 0 ? 'N' : 'S'}, ${fix(Math.abs(o.lon), 3)}°${o.lon >= 0 ? 'E' : 'W'}`],
       ['Lighting', o.sunlit ? 'Sunlit' : 'Earth’s shadow'],
       ['Light time', lightTime(o)],
     );
-  } else if (o.kind !== 'star') {
-    rows.push(['Light time', lightTime(o)]);
-    if (o.mag != null && Number.isFinite(o.mag)) rows.push(['Magnitude', o.mag.toFixed(1)]);
+    const ps = live.passes;
+    const next = ps?.find((p) => p.end > date);
+    if (next) {
+      rows.push(next.start <= date
+        ? ['Pass', `<span class="up">Overhead now · ends in ${countdown(next.end - date)}</span>`]
+        : ['Next pass in', `${countdown(next.start - date)}${next.visible ? ' · visible' : ''}`]);
+    }
+  } else {
+    if (o.kind !== 'star') rows.push(['Light time', lightTime(o)]);
+    if (o.mag != null && Number.isFinite(o.mag)) rows.push(['Magnitude', fix(o.mag, 2)]);
+    const inf = live.info;
+    if (inf) {
+      const future = (d) => d && d > date;
+      if (o.alt > 0 && future(inf.set)) rows.push(['Sets in', countdown(inf.set - date)]);
+      if (o.alt <= 0 && future(inf.rise)) rows.push(['Rises in', countdown(inf.rise - date)]);
+      if (future(inf.transit)) rows.push(['Highest in', countdown(inf.transit - date)]);
+    }
   }
-  $('dLive').innerHTML = `<div class="d-live-h"><span class="pulse"></span>Live position</div>${grid(rows)}`;
+  const stamp = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + `.${Math.floor((nowMs % 1000) / 100)}`;
+  $('dLive').innerHTML = `<div class="d-live-h"><span class="pulse"></span>Live · ${sat ? '10' : '4'}× per second<span class="d-stamp">${stamp}</span></div>${grid(rows)}`;
 }
+export function updateLive() { if (current) { live.lastTick = 0; liveTick(new Date()); } }

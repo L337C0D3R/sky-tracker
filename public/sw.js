@@ -1,5 +1,5 @@
 // Offline shell: cache static assets; network-first for live data (/api/*).
-const CACHE = 'skytracker-v8';
+const CACHE = 'skytracker-v9';
 const ASSETS = [
   './', 'index.html', 'css/app.css', 'js/main.js', 'js/sky.js', 'js/orient.js', 'js/details.js', 'js/camctl.js',
   'vendor/astronomy.js', 'vendor/satellite.js',

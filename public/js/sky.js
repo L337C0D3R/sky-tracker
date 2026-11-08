@@ -293,6 +293,16 @@ export class Sky {
     a.mag = a.el.H + 5 * Math.log10(r * dist) - 2.5 * Math.log10((1 - a.el.G) * phi1 + a.el.G * phi2);
   }
 
+  // Recompute one object right now (used by the live details panel).
+  updateOne(o, date) {
+    const t = A.MakeTime(date);
+    if (o.kind === 'planet') Object.assign(o, this._planet(o.body, t));
+    else if (o.kind === 'star') this._star(o, A.Rotation_EQJ_HOR(t, this.observer));
+    else if (o.kind === 'asteroid') {
+      this._asteroid(o, t, A.HelioVector(A.Body.Earth, t), A.ObserverVector(t, this.observer, false), A.Rotation_EQJ_HOR(t, this.observer));
+    } else if (o.kind === 'satellite') this.updateFast(date, [o]);
+  }
+
   // ---------- Details ----------
   // Extra live facts for Sun / Moon / planets.
   bodyInfo(obj, date) {

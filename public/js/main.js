@@ -1,6 +1,6 @@
 import { Sky, enu } from './sky.js';
 import { Orientation, wrap180, dot, load, save } from './orient.js';
-import { initDetails, openDetails, closeDetails, updateLive, isOpen as detailsOpen } from './details.js';
+import { initDetails, openDetails, closeDetails, liveTick, currentObject, isOpen as detailsOpen } from './details.js';
 import * as camctl from './camctl.js';
 
 const $ = (id) => document.getElementById(id);
@@ -497,6 +497,8 @@ function updateSatellites(date, now) {
   for (const s of sat.near) if (dot(s.e, B.fwd) > cosLim) vis.push(s);
   const t = state.target;
   if (t?.kind === 'satellite' && !vis.includes(t)) vis.push(t);
+  const d = currentObject();
+  if (d?.kind === 'satellite' && !vis.includes(d)) vis.push(d);
   sky.updateFast(date, vis);
   sat.vis = vis;
   // Short motion trails (last ~3 s).
@@ -926,8 +928,8 @@ function hud(date, now) {
   $('clock').textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   drawTape(pt.az);
 
+  liveTick(date);
   if (now - lastLive > 500) {
-    updateLive();
     lastLive = now;
     const up = sat.near.filter((s) => s.alt > 0);
     const starlink = up.filter((s) => s.type === 'Starlink satellite').length;
