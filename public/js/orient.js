@@ -1,28 +1,96 @@
-// Device orientation -> camera basis vectors in the local ENU frame
+// Device orientation -> camera basis in the local East-North-Up frame
 // (x = east, y = north, z = up). Also supports a manual (drag) view.
+//
+// Pipeline
+//  1. Sensor attitude -> rotation matrix R (device axes in ENU). Built from the
+//     W3C Euler angles, which is continuous as a physical rotation even where the
+//     angles themselves wrap.
+//  2. iOS only: the gyro frame has an arbitrary, slowly drifting north (WebKit uses
+//     CoreMotion's XArbitraryZVertical frame). Its offset to magnetic north is learned
+//     from webkitCompassHeading, which WebKit takes from CLHeading.magneticHeading
+//     (portrait) = bearing of the phone's TOP EDGE. That heading is low-pass filtered
+//     and 1°-quantised by iOS, so it lags. It is therefore only trusted while the
+//     phone has been still for a moment, away from vertical, and it can only nudge
+//     north slowly: the gyro drives all motion.
+//  3. Screen rotation, user calibration (yaw offset).
+//  4. Adaptive quaternion smoothing (One-Euro style): strong when still (no jitter),
+//     near-zero lag when moving fast. Slerp never degenerates on big swings.
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
 
 const norm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const lerp = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const wrap360 = (a) => ((a % 360) + 360) % 360;
 export const wrap180 = (a) => ((a + 540) % 360) - 180;
+const angleBetween = (u, v) => Math.acos(Math.max(-1, Math.min(1, dot(u, v)))) * R2D;
+const bearing = (v) => Math.atan2(v[0], v[1]) * R2D; // azimuth of a vector's horizontal part
 
 function load(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } }
+
+// ---------- rotation helpers ----------
+// Device axes (columns of R = Rz(a) Rx(b) Ry(g)) in ENU.
+function eulerAxes(alpha, beta, gamma) {
+  const [a, b, g] = [alpha * D2R, beta * D2R, gamma * D2R];
+  const cA = Math.cos(a), sA = Math.sin(a), cB = Math.cos(b), sB = Math.sin(b), cG = Math.cos(g), sG = Math.sin(g);
+  return {
+    X: [cA * cG - sA * sB * sG, cG * sA + cA * sB * sG, -cB * sG],
+    Y: [-cB * sA, cA * cB, sB],
+    Z: [cG * sA * sB + cA * sG, sA * sG - cA * cG * sB, cB * cG],
+  };
+}
+// Rotate a vector about the vertical axis so its azimuth increases by `deg`.
+function yawVec(v, deg) {
+  const o = deg * D2R, c = Math.cos(o), s = Math.sin(o);
+  return [v[0] * c + v[1] * s, -v[0] * s + v[1] * c, v[2]];
+}
+// Basis {right, up, fwd} <-> unit quaternion (of the matrix with columns right, up, -fwd).
+function basisToQuat({ right: r, up: u, fwd: f }) {
+  const b = [-f[0], -f[1], -f[2]];
+  const m00 = r[0], m01 = u[0], m02 = b[0], m10 = r[1], m11 = u[1], m12 = b[1], m20 = r[2], m21 = u[2], m22 = b[2];
+  const tr = m00 + m11 + m22;
+  let w, x, y, z;
+  if (tr > 0) { const S = Math.sqrt(tr + 1) * 2; w = 0.25 * S; x = (m21 - m12) / S; y = (m02 - m20) / S; z = (m10 - m01) / S; }
+  else if (m00 > m11 && m00 > m22) { const S = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / S; x = 0.25 * S; y = (m01 + m10) / S; z = (m02 + m20) / S; }
+  else if (m11 > m22) { const S = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / S; x = (m01 + m10) / S; y = 0.25 * S; z = (m12 + m21) / S; }
+  else { const S = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / S; x = (m02 + m20) / S; y = (m12 + m21) / S; z = 0.25 * S; }
+  const l = Math.hypot(w, x, y, z) || 1;
+  return [w / l, x / l, y / l, z / l];
+}
+function quatToBasis([w, x, y, z]) {
+  const right = [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)];
+  const up = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+  const back = [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)];
+  return { right, up, fwd: [-back[0], -back[1], -back[2]] };
+}
+function slerp(a, b, t) {
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  if (d < 0) { b = b.map((v) => -v); d = -d; } // shortest path
+  if (d > 0.9995) { const r = a.map((v, i) => v + (b[i] - v) * t); const l = Math.hypot(...r); return r.map((v) => v / l); }
+  const th = Math.acos(d), s = Math.sin(th);
+  const ka = Math.sin((1 - t) * th) / s, kb = Math.sin(t * th) / s;
+  return a.map((v, i) => v * ka + b[i] * kb);
+}
+const quatAngle = (a, b) => 2 * Math.acos(Math.min(1, Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]))) * R2D;
 
 export class Orientation {
   constructor() {
     this.mode = 'manual'; // 'sensor' | 'manual'
     this.view = { az: 180, alt: 35 };
-    this.yawOffset = load('yawOffset', 0); // user calibration, degrees
-    this.raw = null; // latest sensor basis
-    this.basis = null; // smoothed basis {right, up, fwd}
+    this.yawOffset = load('yawOffset', 0); // user calibration (Align), degrees
+    this.raw = null; // latest sensor axes {X,Y,Z} in ENU, north-corrected
+    this.basis = null; // smoothed camera basis {right, up, fwd}
     this.absolute = false;
-    this.iosOffset = null; // alpha -> true heading offset on iOS
+    this.accuracy = null;
     this.lastEvent = 0;
+    // iOS compass fusion state
+    this.ios = { delta: null, acquiredAt: 0, lastT: 0, stillSince: 0, prev: null, speed: 0, outlierT: 0,
+      model: load('iosHeadingModel', 'top'), votes: { top: 0, cam: 0 }, agnostic: null };
+    // smoothing state
+    this.q = null;
+    this.qt = 0;
+    this.speed = 0;
     this._onEvt = this._onEvt.bind(this);
   }
 
@@ -49,53 +117,105 @@ export class Orientation {
 
   get hasSensor() { return performance.now() - this.lastEvent < 2000; }
 
+  // Human-readable compass state for the HUD.
+  get status() {
+    if (!this.hasSensor) return null;
+    if (this.isIOS && this.ios.delta == null) return 'finding north: hold still';
+    return null;
+  }
+
   _onEvt(e, absEvt) {
     if (e.alpha == null || e.beta == null) return;
-    let alpha = e.alpha;
+    const now = performance.now();
     const ios = typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading);
+    let ax = eulerAxes(e.alpha, e.beta, e.gamma || 0);
     if (ios) {
-      // iOS gives two things:
-      //  • e.alpha/beta/gamma: smooth gyro attitude, but alpha has an arbitrary zero;
-      //  • webkitCompassHeading: compass bearing of the phone's TOP EDGE (its y axis)
-      //    projected onto the horizon. Tilted up at the sky (beta > 90°) the top edge
-      //    points back towards you, so this bearing is ~180° from where the camera looks.
-      // So compute where the y axis points in the gyro frame and learn the yaw offset
-      // between the two frames. That is valid in any pose except when the y axis is
-      // near vertical (phone upright), where the compass bearing is undefined.
-      const a = e.alpha * D2R, cB = Math.cos(e.beta * D2R);
-      const minHoriz = this.iosDelta == null ? 0.1 : 0.34; // accept a rougher first sample
-      if (Math.abs(cB) > minHoriz) {
-        const yHeading = Math.atan2(-cB * Math.sin(a), Math.cos(a) * cB) * R2D; // y-axis bearing, gyro frame
-        const cand = wrap180(e.webkitCompassHeading - yHeading);
-        if (this.iosDelta == null) this.iosDelta = cand;
-        else this.iosDelta = wrap180(this.iosDelta + wrap180(cand - this.iosDelta) * 0.08);
-      }
-      if (this.iosDelta == null) return; // wait for one usable compass sample
-      alpha = e.alpha - this.iosDelta; // rotate the gyro frame onto true(ish) north
-      this.absolute = true;
-      // iOS reports the compass uncertainty in degrees (−1 = needs calibration).
+      this.isIOS = true;
       if (typeof e.webkitCompassAccuracy === 'number') this.accuracy = e.webkitCompassAccuracy;
+      this._iosFuse(ax, e.webkitCompassHeading, this.accuracy, now);
+      if (this.ios.delta == null) { this.lastEvent = now; return; } // north unknown yet
+      ax = { X: yawVec(ax.X, this.ios.delta), Y: yawVec(ax.Y, this.ios.delta), Z: yawVec(ax.Z, this.ios.delta) };
+      this.absolute = true;
     } else if (absEvt || e.absolute) {
       this.absolute = true;
     } else if (this.absolute) {
       return; // prefer absolute events when the browser provides both
     }
-    this.lastEvent = performance.now();
-    this.raw = this._basisFromEuler(alpha, e.beta, e.gamma || 0);
+    this.lastEvent = now;
+    this.raw = ax;
   }
 
-  _basisFromEuler(alpha, beta, gamma) {
-    const [a, b, g] = [alpha * D2R, beta * D2R, gamma * D2R];
-    const cA = Math.cos(a), sA = Math.sin(a), cB = Math.cos(b), sB = Math.sin(b), cG = Math.cos(g), sG = Math.sin(g);
-    // Columns of R = Rz(a) Rx(b) Ry(g): device axes expressed in ENU.
-    const X = [cA * cG - sA * sB * sG, cG * sA + cA * sB * sG, -cB * sG];
-    const Y = [-cB * sA, cA * cB, sB];
-    const Z = [cG * sA * sB + cA * sG, sA * sG - cA * cG * sB, cB * cG];
+  // Learns delta = (magnetic north frame) − (gyro frame), as an azimuth rotation.
+  _iosFuse(ax, heading, accuracy, now) {
+    const s = this.ios;
+    // How fast is the phone turning? (gyro frame, no compass involved)
+    if (s.prev) {
+      const dt = (now - s.prev.t) / 1000;
+      if (dt > 0.002) {
+        const rate = Math.max(angleBetween(ax.Z, s.prev.Z), angleBetween(ax.Y, s.prev.Y)) / dt;
+        s.speed += (rate - s.speed) * Math.min(1, dt / 0.08);
+      }
+    }
+    s.prev = { t: now, Z: ax.Z, Y: ax.Y };
+    if (s.speed > 6) s.stillSince = now;
+    const dt = Math.min(0.2, s.lastT ? (now - s.lastT) / 1000 : 0.016);
+    s.lastT = now;
+    if (!(heading >= 0)) return;
+    if (accuracy != null && accuracy < 0 && s.delta != null) return; // iOS says: compass needs calibration
+
+    // Candidate bearings in the gyro frame: top edge (what CLHeading measures) and camera.
+    const Yh = Math.hypot(ax.Y[0], ax.Y[1]);
+    const F = [-ax.Z[0], -ax.Z[1], -ax.Z[2]];
+    const Fh = Math.hypot(F[0], F[1]);
+    const bTop = bearing(ax.Y), bCam = bearing(F);
+    const settledMs = s.delta == null ? 250 : 700; // let iOS's own heading filter catch up after motion
+    const settled = now - s.stillSince > settledMs;
+
+    // Self-check of how iOS defines the heading (top edge vs camera): when both
+    // bearings agree the sample is unambiguous; when they are opposite, it tells the two apart.
+    if (settled && Yh > 0.5 && Fh > 0.5) {
+      const sep = Math.abs(wrap180(bTop - bCam));
+      if (sep < 15) s.agnostic = { d: wrap180(heading - bTop), t: now };
+      else if (sep > 165 && s.agnostic && now - s.agnostic.t < 60000) {
+        const dTop = Math.abs(wrap180(heading - bTop - s.agnostic.d)), dCam = Math.abs(wrap180(heading - bCam - s.agnostic.d));
+        if (dTop < 25 && dCam > 120) s.votes.top++;
+        else if (dCam < 25 && dTop > 120) s.votes.cam++;
+        const lead = s.votes.cam - s.votes.top;
+        if (s.model === 'top' && lead > 40) { s.model = 'cam'; save('iosHeadingModel', 'cam'); s.delta = null; }
+        else if (s.model === 'cam' && lead < -40) { s.model = 'top'; save('iosHeadingModel', 'top'); s.delta = null; }
+      }
+    }
+
+    // Use the sample only where the measured axis is well away from vertical.
+    const useTop = s.model === 'top';
+    const h = useTop ? Yh : Fh;
+    if (h < (s.delta == null ? 0.25 : 0.5)) return;
+    if (!settled) return;
+    const cand = wrap180(heading - (useTop ? bTop : bCam));
+    if (s.delta == null) { s.delta = cand; s.acquiredAt = now; s.outlierT = 0; return; }
+    const err = wrap180(cand - s.delta);
+    const acquiring = now - s.acquiredAt < 3000;
+    if (!acquiring && Math.abs(err) > 25) {
+      // Big disagreement: a magnet/metal nearby or a stale reading. Only accept if it persists.
+      s.outlierT += dt;
+      if (s.outlierT > 4) { s.delta = cand; s.acquiredAt = now; s.outlierT = 0; }
+      return;
+    }
+    s.outlierT = 0;
+    const poor = accuracy != null && accuracy > 25;
+    const tau = acquiring ? 0.5 : poor ? 12 : 5; // seconds
+    s.delta = wrap180(s.delta + err * (1 - Math.exp(-dt / tau)));
+  }
+
+  _sensorBasis() {
+    const { X, Y, Z } = this.raw;
     const th = ((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0) * D2R;
     const c = Math.cos(th), s = Math.sin(th);
-    const right = [c * X[0] - s * Y[0], c * X[1] - s * Y[1], c * X[2] - s * Y[2]];
-    const up = [s * X[0] + c * Y[0], s * X[1] + c * Y[1], s * X[2] + c * Y[2]];
-    return { right, up, fwd: [-Z[0], -Z[1], -Z[2]] };
+    let right = [c * X[0] - s * Y[0], c * X[1] - s * Y[1], c * X[2] - s * Y[2]];
+    let up = [s * X[0] + c * Y[0], s * X[1] + c * Y[1], s * X[2] + c * Y[2]];
+    let fwd = [-Z[0], -Z[1], -Z[2]];
+    if (this.yawOffset) { right = yawVec(right, this.yawOffset); up = yawVec(up, this.yawOffset); fwd = yawVec(fwd, this.yawOffset); }
+    return { right, up, fwd };
   }
 
   _basisFromView(az, alt) {
@@ -107,28 +227,27 @@ export class Orientation {
     return { right, up, fwd };
   }
 
-  _yaw(v) {
-    const o = this.yawOffset * D2R, c = Math.cos(o), s = Math.sin(o);
-    return [v[0] * c + v[1] * s, -v[0] * s + v[1] * c, v[2]];
-  }
-
   // Call once per frame. Returns the smoothed basis.
   update(zoom = 1) {
-    let target;
-    if (this.mode === 'sensor' && this.raw) {
-      target = { right: this._yaw(this.raw.right), up: this._yaw(this.raw.up), fwd: this._yaw(this.raw.fwd) };
-    } else {
-      target = this._basisFromView(this.view.az, this.view.alt);
-    }
-    if (!this.basis) this.basis = target;
-    else {
-      // Heavier smoothing when zoomed in, so sensor jitter isn't magnified.
-      const k = this.mode === 'sensor' ? 0.22 / Math.sqrt(zoom) : 0.5;
-      let fwd = norm(lerp(this.basis.fwd, target.fwd, k));
-      let up = lerp(this.basis.up, target.up, k);
-      up = norm(up.map((x, i) => x - dot(up, fwd) * fwd[i]));
-      this.basis = { fwd, up, right: cross(fwd, up) };
-    }
+    const sensor = this.mode === 'sensor' && this.raw;
+    const target = basisToQuat(sensor ? this._sensorBasis() : this._basisFromView(this.view.az, this.view.alt));
+    const now = performance.now();
+    if (!this.q) { this.q = target; this.qt = now; this.basis = quatToBasis(target); return this.basis; }
+    const dt = Math.min(0.1, Math.max(0.001, (now - this.qt) / 1000));
+    this.qt = now;
+    // One-Euro filter on rotation: the cutoff rises with how fast the *target* turns.
+    // That speed is itself low-passed and given a dead-zone, so sensor noise
+    // (a few tenths of a degree per sample) never looks like motion.
+    const tSpeed = this.prevTarget ? quatAngle(this.prevTarget, target) / dt : 0;
+    this.prevTarget = target;
+    this.speed += (tSpeed - this.speed) * (1 - Math.exp(-dt / 0.06));
+    const moving = Math.max(0, this.speed - (sensor ? 12 : 0)); // deg/s above the noise floor
+    const z = Math.max(1, zoom);
+    const fMin = sensor ? 1.1 / Math.sqrt(z) : 6; // Hz when still (lower = smoother)
+    const fc = fMin + (sensor ? 0.16 : 0.3) * moving; // Hz
+    const k = 1 - Math.exp(-2 * Math.PI * fc * dt);
+    this.q = slerp(this.q, target, Math.min(1, k));
+    this.basis = quatToBasis(this.q);
     return this.basis;
   }
 

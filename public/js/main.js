@@ -1129,7 +1129,7 @@ function hud(date, now) {
   $('heading').textContent = `${Math.round(pt.az)}° ${cardinal(pt.az)}`;
   const acc = orient.accuracy;
   const src = state.mode === 'ar'
-    ? (orient.mode === 'sensor' ? (orient.absolute ? `compass${acc > 0 ? ` ±${Math.round(acc)}°` : ''}` : 'gyro only') : 'drag to look')
+    ? (orient.mode === 'sensor' ? (orient.status || (orient.absolute ? `compass${acc > 0 ? ` ±${Math.round(acc)}°` : ''}` : 'gyro only')) : 'drag to look')
     : 'sky map';
   if (state.mode === 'ar' && orient.mode === 'sensor' && acc != null && (acc < 0 || acc > 25) && !state.calHinted) {
     state.calHinted = true;
@@ -1536,4 +1536,7 @@ function splashStars() {
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+// Read-only handle for automated tests and debugging in the browser console.
+window.__skytracker = { orient, sky, state };
+
 init().catch((e) => { console.error(e); toast(`Failed to start: ${e.message}`, 10000); });
