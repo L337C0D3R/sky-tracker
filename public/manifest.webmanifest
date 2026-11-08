@@ -1,0 +1,11 @@
+{
+  "name": "SkyTracker AR",
+  "short_name": "SkyTracker",
+  "description": "Point your phone at the sky to find planets, stars, satellites and asteroids in real time.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#05070f",
+  "theme_color": "#05070f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

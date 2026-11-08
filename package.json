@@ -1,0 +1,19 @@
+{
+  "name": "sky-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "data": "node scripts/build-data.mjs",
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public --project-name sky-tracker"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "astronomy-engine": "^2.1.19",
+    "satellite.js": "^5.0.0"
+  },
+  "private": true
+}
