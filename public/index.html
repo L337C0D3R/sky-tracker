@@ -60,6 +60,11 @@
 
   <button id="btnSensors" class="pill-btn hidden">Enable compass &amp; motion</button>
   <div id="camBanner" class="hidden"><span id="camMsg"></span><button id="camRetry">Retry camera</button></div>
+  <div id="darkHint" class="hidden">
+    <span><b>Camera is on.</b> The picture is very dark because the night sky is too dim for a phone camera at normal settings.</span>
+    <button id="darkBoost">Brighten</button>
+    <button id="darkClose" class="icon" aria-label="Dismiss">✕</button>
+  </div>
 
   <nav id="toolbar" class="hidden">
     <button id="btnSearch" aria-label="Find object">
@@ -114,6 +119,9 @@
       <div id="camHw"></div>
       <h3>Software boost <span class="muted small">works on every phone</span></h3>
       <div id="camSwBox"></div>
+      <h3>Diagnostics</h3>
+      <pre id="camDiag" class="diag">Open the camera to see its status.</pre>
+      <button id="camReset" class="ghost">Reset camera settings</button>
       <p class="muted small about">A phone camera in live video can show bright stars and planets, the Moon, and bright satellites such as the ISS, Tiangong and fresh Starlink “trains”. For the best chance, use <b>Night sky</b>, rest the phone on something steady, and look 1–2 hours after sunset or before sunrise, when satellites are still in sunlight but your sky is dark. Fainter satellites won’t show on camera, but the overlay still marks exactly where each one is.</p>
     </div>
   </section>

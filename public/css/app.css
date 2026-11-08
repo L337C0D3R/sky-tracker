@@ -250,3 +250,12 @@ body.red { --accent: #b3261e; --accent-2: #ff5a4d; --good: #ff6b5e; }
   .feats { display: none; }
   #stars { position: fixed; }
 }
+
+#camBtn.stalled { border-color: #ff6b6b; color: #ff9b9b; }
+#darkHint { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 222px); z-index: 3;
+  width: min(440px, calc(100vw - 24px)); display: flex; gap: 10px; align-items: center; padding: 10px 10px 10px 14px;
+  border-radius: 16px; background: var(--glass-strong); border: 1px solid rgba(126,240,207,.35); font-size: 13px; line-height: 1.35; }
+#darkHint span { flex: 1; }
+#darkHint #darkBoost { flex: none; border: 0; background: var(--accent-2); color: #04211a; font-weight: 700; padding: 8px 12px; border-radius: 10px; }
+.diag { margin: 0; padding: 10px 12px; border-radius: 12px; background: rgba(0,0,0,.35); border: 1px solid var(--line);
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #cfe3ff; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }

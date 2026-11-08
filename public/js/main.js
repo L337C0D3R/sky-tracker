@@ -122,7 +122,22 @@ async function init() {
   addEventListener('resize', resize);
   splashStars();
   bindUI();
-  camctl.initCamControls(video, $('camfx'), { onZoom: () => cssZoom(), onLens: () => { syncFovUi(); cssZoom(); } });
+  camctl.initCamControls(video, $('camfx'), {
+    onZoom: () => cssZoom(),
+    onLens: () => { syncFovUi(); cssZoom(); },
+    // Frames stopped arriving: restart the camera (at most every 15 s).
+    onStall: async () => {
+      if (state.mode !== 'ar' || document.hidden || Date.now() - (state.lastRestart || 0) < 15000) return;
+      state.lastRestart = Date.now();
+      try { await startCamera(true); } catch (e) { cam.error = e; showCamBanner(); }
+    },
+    // Camera works but the picture is nearly black (normal at night).
+    onDark: () => {
+      if (state.mode !== 'ar' || state.darkHinted) return;
+      state.darkHinted = true;
+      $('darkHint').classList.remove('hidden');
+    },
+  });
   camctl.setOpenHandler((id) => attachStream(() => camctl.open(id)));
   await sky.loadStatic();
   const consNames = Object.fromEntries(sky.constellations.map((c) => [c.id, c.name]));
@@ -1122,6 +1137,8 @@ function bindUI() {
     else await startAR(true);
   };
   $('camRetry').onclick = () => startAR(true);
+  $('darkBoost').onclick = () => { $('darkHint').classList.add('hidden'); camctl.applyPreset('night'); toast('Night camera on. Rest the phone on something steady for the best picture.'); };
+  $('darkClose').onclick = () => $('darkHint').classList.add('hidden');
   $('iosHintClose').onclick = () => { $('iosHint').classList.add('hidden'); save('iosHintDone', true); };
   $('btnSensors').onclick = async () => {
     $('btnSensors').classList.add('hidden');

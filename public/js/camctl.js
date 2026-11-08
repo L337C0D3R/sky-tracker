@@ -13,6 +13,13 @@ let onLensChange = null;
 const fovMap = load('camFovMap', {});
 const zoom = { want: 1, applied: 1 };
 let busy = false, queued = false, lastReadout = 0, stackFresh = true;
+let hwTouched = false; // only call applyConstraints once the user (or a preset) changed something
+// Health monitoring
+let lastTime = -1, lastProgress = 0, luma = null, darkCount = 0, stallFired = 0, stallStep = 0;
+const lumaCanvas = document.createElement('canvas');
+lumaCanvas.width = lumaCanvas.height = 24;
+const lumaCtx = lumaCanvas.getContext('2d', { willReadFrequently: true });
+let onStall = null, onDark = null;
 
 const sw = { preset: 'auto', gain: 1, contrast: 1, stack: 1, ...load('camSw', {}) };
 let hw = { mode: 'auto', exposureTime: null, iso: null, ev: null, fps: 30, focusInf: false, wb: null, ...load('camHw', {}) };
@@ -57,6 +64,7 @@ export async function applyPreset(name) {
   sw.preset = name;
   Object.assign(sw, SW_PRESETS[name]);
   hw = hwPreset(name);
+  hwTouched = true;
   persist();
   applySoftware();
   syncUi();
@@ -70,7 +78,8 @@ function compose() {
   // Separate advanced sets: each is best-effort, so one unsupported setting
   // doesn't cancel the others.
   const sets = [];
-  if (range('zoom')) sets.push({ zoom: zoom.want });
+  if (range('zoom') && (zoom.want !== 1 || zoom.applied !== 1)) sets.push({ zoom: zoom.want });
+  if (!hwTouched) return { advanced: sets };
   if (hw.mode === 'manual' && has('exposureMode', 'manual')) {
     const s = { exposureMode: 'manual' };
     if (range('exposureTime') && hw.exposureTime) s.exposureTime = hw.exposureTime;
@@ -86,15 +95,20 @@ function compose() {
   if (range('frameRate')) c.frameRate = { ideal: hw.fps };
   return c;
 }
+function needsApply(c) {
+  return c.advanced.length > 0 || c.frameRate;
+}
 
 async function applyHardware() {
   if (!track || track.readyState !== 'live') return;
   if (busy) { queued = true; return; }
+  const c = compose();
+  if (!needsApply(c)) return; // nothing to change: never poke the camera needlessly (iOS can freeze)
   busy = true;
   try {
-    await track.applyConstraints(compose());
+    await track.applyConstraints(c);
     const s = track.getSettings?.() || {};
-    zoom.applied = typeof s.zoom === 'number' ? s.zoom : (range('zoom') ? zoom.want : 1);
+    zoom.applied = typeof s.zoom === 'number' && s.zoom >= 1 ? s.zoom : (range('zoom') ? zoom.want : 1);
     $('camErr').textContent = '';
   } catch (e) {
     $('camErr').textContent = `The camera refused some settings (${e.name}).`;
@@ -108,7 +122,7 @@ async function applyHardware() {
 }
 
 let onZoomChange = null;
-export function hwZoomApplied() { return zoom.applied; }
+export function hwZoomApplied() { const z = zoom.applied; return Number.isFinite(z) && z >= 1 ? z : 1; }
 export function setHwZoom(z) {
   const r = range('zoom');
   if (!r) { zoom.applied = 1; return; }
@@ -125,8 +139,9 @@ function applySoftware() {
   fx.style.filter = f;
   updateVisibility();
 }
+function stackingActive() { return visible && sw.stack > 1 && video.readyState >= 2 && video.videoWidth > 0; }
 function updateVisibility() {
-  const stacking = visible && sw.stack > 1;
+  const stacking = stackingActive();
   video.style.display = visible ? 'block' : 'none';
   video.style.opacity = stacking ? '0' : '1';
   fx.style.display = stacking ? 'block' : 'none';
@@ -138,8 +153,11 @@ function updateVisibility() {
 
 // Called every animation frame while the camera is shown.
 export function frame(now) {
-  if (!visible || !video.videoWidth) return;
-  if (sw.stack > 1) {
+  if (!visible) return;
+  if (now - lastReadout > 1000) { lastReadout = now; readout(); health(now); }
+  if (!video.videoWidth) return;
+  if (stackingActive() !== (fx.style.display === 'block')) updateVisibility();
+  if (stackingActive()) {
     const dpr = Math.min(devicePixelRatio || 1, 1.5);
     const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
     if (fx.width !== W || fx.height !== H) { fx.width = W; fx.height = H; stackFresh = true; }
@@ -148,11 +166,57 @@ export function frame(now) {
     const dw = vw * s, dh = vh * s;
     // Running average of the last ~N frames: noise drops by about √N.
     fctx.globalAlpha = stackFresh ? 1 : 1 / sw.stack;
-    fctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh);
-    stackFresh = false;
+    try { fctx.drawImage(video, (W - dw) / 2, (H - dh) / 2, dw, dh); stackFresh = false; } catch { sw.stack = 1; updateVisibility(); }
   }
-  if (now - lastReadout > 1000) { lastReadout = now; readout(); }
 }
+
+// Once a second: are frames still arriving, and how bright is the picture?
+function health(now) {
+  const t = video.currentTime;
+  if (t !== lastTime) { lastTime = t; lastProgress = now; }
+  const stalled = track && now - lastProgress > 3500;
+  const btn = $('camBtn');
+  btn.classList.toggle('stalled', !!stalled);
+  if (!stalled) stallStep = 0;
+  else if (now - stallFired > 4000) {
+    stallFired = now;
+    // Recovery ladder: re-attach the stream to the <video>, then fully restart the camera.
+    if (stallStep++ === 0 && video.srcObject) {
+      const so = video.srcObject;
+      video.srcObject = null;
+      video.srcObject = so;
+      video.play().catch(() => {});
+    } else onStall?.();
+  }
+  if (video.videoWidth && video.readyState >= 2) {
+    try {
+      lumaCtx.drawImage(video, 0, 0, 24, 24);
+      const d = lumaCtx.getImageData(0, 0, 24, 24).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      luma = sum / (d.length / 4) / 255;
+    } catch { luma = null; }
+    if (luma != null && luma < 0.05 && sw.preset === 'auto' && sw.gain === 1) {
+      if (++darkCount === 4) onDark?.(luma);
+    } else darkCount = 0;
+  }
+  if (!$('camSheet').classList.contains('hidden')) diagnostics();
+}
+
+function diagnostics() {
+  const s = track?.getSettings?.() || {};
+  const vs = getComputedStyle(video), fs = getComputedStyle(fx);
+  const lines = [
+    `Track: ${track ? `${track.readyState}${track.muted ? ', muted' : ''}${track.enabled ? '' : ', disabled'}` : 'none'} · ${track?.label || '—'}`,
+    `Stream: ${s.width || '?'}×${s.height || '?'} @ ${s.frameRate ? Math.round(s.frameRate) : '?'} fps`,
+    `Video: ${video.videoWidth}×${video.videoHeight}, ready ${video.readyState}, ${video.paused ? 'paused' : 'playing'}, t=${video.currentTime.toFixed(1)}s`,
+    `Frames: ${performance.now() - lastProgress < 2000 ? 'arriving' : 'NOT arriving'} · picture brightness ${luma == null ? '?' : `${Math.round(luma * 100)}%`}`,
+    `Display: video ${vs.display}/${vs.opacity}/${video.style.transform || 'none'} · stack canvas ${fs.display}`,
+    `Settings: ${sw.preset} · gain ${sw.gain} · stack ${sw.stack} · hw ${hw.mode}${hwTouched ? '' : ' (untouched)'}`,
+  ];
+  $('camDiag').textContent = lines.join('\n');
+}
+export function pictureBrightness() { return luma; }
 
 function readout() {
   if (!track) return;
@@ -205,10 +269,10 @@ function renderHwControls() {
     box.innerHTML = '<p class="muted small">This browser doesn’t allow manual camera control. iPhone and iPad browsers never do; on Android use Chrome. The software boost below still works.</p>';
     return;
   }
-  const hwSet = (k, v) => { hw[k] = v; custom(); applyHardware(); };
+  const hwSet = (k, v) => { hw[k] = v; hwTouched = true; custom(); applyHardware(); };
   if (manual && et) {
     box.append(slider('cShutter', 'Shutter', et.min, et.max, 0, hw.exposureTime ?? Math.min(et.max, 333), shutterText, (v) => {
-      hw.mode = 'manual'; hw.exposureTime = Math.round(v);
+      hw.mode = 'manual'; hw.exposureTime = Math.round(v); hwTouched = true;
       // A slow shutter needs a slow frame rate.
       const need = Math.floor(10000 / hw.exposureTime);
       if (fr && hw.fps > need) hw.fps = clamp(need, fr.min, fr.max);
@@ -247,8 +311,14 @@ function renderSwControls() {
   );
 }
 
-export function initCamControls(videoEl, fxCanvas, { onZoom, onLens } = {}) {
+export function initCamControls(videoEl, fxCanvas, { onZoom, onLens, onStall: st, onDark: dk } = {}) {
   onLensChange = onLens;
+  onStall = st;
+  onDark = dk;
+  $('camReset').onclick = () => {
+    for (const k of ['camSw', 'camHw', 'camDevice', 'camFovMap']) { try { localStorage.removeItem(k); } catch { /* */ } }
+    location.reload();
+  };
   video = videoEl;
   fx = fxCanvas;
   fctx = fx.getContext('2d', { alpha: false });
@@ -269,6 +339,8 @@ export function initCamControls(videoEl, fxCanvas, { onZoom, onLens } = {}) {
 
 async function cameraStarted(t) {
   track = t;
+  hwTouched = sw.preset !== 'auto' || hw.mode === 'manual';
+  lastProgress = performance.now();
   caps = t.getCapabilities?.() || {};
   zoom.want = 1;
   zoom.applied = 1;
