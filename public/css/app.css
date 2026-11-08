@@ -226,8 +226,8 @@ button.link { border: 0; background: none; color: #b8c4ea; text-decoration: unde
 #camHw label.range span, #camSwBox label.range span { min-width: 108px; }
 
 /* ---------- iPhone extras ---------- */
-#iosHint { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 156px); z-index: 3;
-  width: min(420px, calc(100vw - 24px)); display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px;
+#iosHint { position: fixed; left: calc(env(safe-area-inset-left) + 12px); top: calc(env(safe-area-inset-top) + 156px); z-index: 3;
+  width: min(400px, calc(100vw - 90px)); display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px;
   border-radius: 18px; background: var(--glass-strong); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 13.5px; }
 #iosHint img { width: 40px; height: 40px; border-radius: 10px; flex: none; }
 #iosHint svg { width: 16px; height: 16px; vertical-align: -3px; fill: none; stroke: #9fb4ff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -252,8 +252,8 @@ body.red { --accent: #b3261e; --accent-2: #ff5a4d; --good: #ff6b5e; }
 }
 
 #camBtn.stalled { border-color: #ff6b6b; color: #ff9b9b; }
-#darkHint { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 222px); z-index: 3;
-  width: min(440px, calc(100vw - 24px)); display: flex; gap: 10px; align-items: center; padding: 10px 10px 10px 14px;
+#darkHint { position: fixed; left: calc(env(safe-area-inset-left) + 12px); top: calc(env(safe-area-inset-top) + 222px); z-index: 3;
+  width: min(420px, calc(100vw - 90px)); display: flex; gap: 10px; align-items: center; padding: 10px 10px 10px 14px;
   border-radius: 16px; background: var(--glass-strong); border: 1px solid rgba(126,240,207,.35); font-size: 13px; line-height: 1.35; }
 #darkHint span { flex: 1; }
 #darkHint #darkBoost { flex: none; border: 0; background: var(--accent-2); color: #04211a; font-weight: 700; padding: 8px 12px; border-radius: 10px; }
@@ -266,3 +266,38 @@ body.red { --accent: #b3261e; --accent-2: #ff5a4d; --good: #ff6b5e; }
 #hoverTip { position: fixed; z-index: 3; pointer-events: none; max-width: 240px; padding: 6px 10px; border-radius: 10px;
   background: var(--glass-strong); border: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; }
 #hoverTip b { font-weight: 650; }
+
+/* ---------- Nearest 10 ---------- */
+#btnNear { position: fixed; right: calc(env(safe-area-inset-right) + 12px); top: calc(50% - 196px); width: 48px; height: 58px; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1px solid var(--line);
+  border-radius: 16px; background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 10px; font-weight: 600; }
+#btnNear svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+#btnNear.on { background: rgba(126,240,207,.22); border-color: rgba(126,240,207,.7); color: var(--accent-2); }
+body:not(.app-on) #btnNear { display: none; }
+#nearPanel { position: fixed; left: calc(env(safe-area-inset-left) + 12px); bottom: calc(env(safe-area-inset-bottom) + 88px); z-index: 2;
+  width: min(380px, calc(100vw - 84px)); max-height: 44dvh; display: flex; flex-direction: column; border-radius: 18px;
+  background: var(--glass-strong); border: 1px solid rgba(126,240,207,.3); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); overflow: hidden; }
+#nearHead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; flex: none; }
+#nearHead b { font: 650 14px var(--display); }
+#nearHead button { margin-left: auto; border: 1px solid var(--line); background: rgba(255,255,255,.06); border-radius: 9px; padding: 4px 9px; font-size: 12px; }
+#nearList { list-style: none; margin: 0; padding: 0 6px 6px; overflow-y: auto; }
+#nearList li { display: flex; align-items: center; gap: 10px; padding: 6px 6px; border-radius: 10px; cursor: pointer; }
+#nearList li.sel { background: rgba(126,240,207,.12); }
+#nearList .rank { width: 20px; text-align: center; font: 700 13px var(--display); color: var(--accent-2); flex: none; }
+#nearList .nm { flex: 1; min-width: 0; }
+#nearList .nm b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#nearList .nm span, #nearList .dist span { display: block; font-size: 11px; color: var(--muted); }
+#nearList .dist { text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+#nearList .dist b { font-size: 13px; }
+#nearPanel.collapsed #nearList { display: none; }
+body.focus #reticle { top: calc(50% + 36px); }
+/* Hide the target card behind the panel? No: the panel steps aside while a target is selected. */
+body.has-target #nearPanel { display: none; }
+.loc-info { margin: 6px 0 2px; color: #cfd8f0; line-height: 1.45; }
+/* compact Nearest-10 list */
+#nearPanel { max-height: 34dvh; }
+#nearHead { white-space: nowrap; padding: 8px 10px; }
+#nearHead .muted { display: none; }
+#nearList li { padding: 4px 6px; gap: 8px; }
+#nearList .dist, #nearList .dist span, #nearList .nm span { white-space: nowrap; }
+@media (min-width: 420px) { #nearHead .muted { display: inline; } }

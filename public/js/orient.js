@@ -54,13 +54,24 @@ export class Orientation {
     let alpha = e.alpha;
     const ios = typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading);
     if (ios) {
-      // iOS: e.alpha is gyro-stable but has an arbitrary zero; webkitCompassHeading is
-      // magnetic but jumps near vertical. Learn the offset while the phone is not upright.
-      const cand = wrap360(360 - e.webkitCompassHeading - e.alpha);
-      const reliable = Math.abs(e.beta) < 70 && Math.abs(e.gamma) < 40;
-      if (this.iosOffset == null) this.iosOffset = cand;
-      else if (reliable) this.iosOffset = wrap360(this.iosOffset + wrap180(cand - this.iosOffset) * 0.05);
-      alpha = e.alpha + this.iosOffset;
+      // iOS gives two things:
+      //  • e.alpha/beta/gamma: smooth gyro attitude, but alpha has an arbitrary zero;
+      //  • webkitCompassHeading: compass bearing of the phone's TOP EDGE (its y axis)
+      //    projected onto the horizon. Tilted up at the sky (beta > 90°) the top edge
+      //    points back towards you, so this bearing is ~180° from where the camera looks.
+      // So compute where the y axis points in the gyro frame and learn the yaw offset
+      // between the two frames. That is valid in any pose except when the y axis is
+      // near vertical (phone upright), where the compass bearing is undefined.
+      const a = e.alpha * D2R, cB = Math.cos(e.beta * D2R);
+      const minHoriz = this.iosDelta == null ? 0.1 : 0.34; // accept a rougher first sample
+      if (Math.abs(cB) > minHoriz) {
+        const yHeading = Math.atan2(-cB * Math.sin(a), Math.cos(a) * cB) * R2D; // y-axis bearing, gyro frame
+        const cand = wrap180(e.webkitCompassHeading - yHeading);
+        if (this.iosDelta == null) this.iosDelta = cand;
+        else this.iosDelta = wrap180(this.iosDelta + wrap180(cand - this.iosDelta) * 0.08);
+      }
+      if (this.iosDelta == null) return; // wait for one usable compass sample
+      alpha = e.alpha - this.iosDelta; // rotate the gyro frame onto true(ish) north
       this.absolute = true;
       // iOS reports the compass uncertainty in degrees (−1 = needs calibration).
       if (typeof e.webkitCompassAccuracy === 'number') this.accuracy = e.webkitCompassAccuracy;

@@ -50,6 +50,13 @@
   <div id="reticle" class="hidden"></div>
   <div id="hoverTip" class="hidden"></div>
 
+  <button id="btnNear" aria-label="Show only the 10 nearest satellites">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6.5" stroke-dasharray="2 2.6"/><circle cx="12" cy="12" r="10.2" stroke-dasharray="2 3"/><circle cx="18.5" cy="8" r="1.6" fill="currentColor"/></svg><span>Near 10</span>
+  </button>
+  <section id="nearPanel" class="hidden">
+    <div id="nearHead"><span class="pulse"></span><b>10 nearest satellites</b><span class="muted small">live distance</span><button id="nearOff">Show all</button></div>
+    <ol id="nearList"></ol>
+  </section>
   <button id="camBtn" class="hidden" aria-label="Night camera settings">
     <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg><span>Night</span>
   </button>
@@ -191,6 +198,8 @@
       <h3>Location</h3>
       <div class="row gap"><input id="lat" inputmode="decimal" placeholder="Latitude" /><input id="lon" inputmode="decimal" placeholder="Longitude" /></div>
       <div class="row gap"><button id="locSet" class="ghost">Use these</button><button id="locGps" class="ghost">Use GPS</button></div>
+      <p id="locInfo" class="small loc-info"></p>
+      <a id="locMap" class="wiki-link" target="_blank" rel="noopener">Check this position on a map →</a>
       <p class="muted small about">Planets, Sun and Moon: Astronomy Engine (VSOP87, ±1″). Asteroids: today's NASA/JPL Horizons elements. Satellites: SGP4 on CelesTrak TLEs, recomputed every frame. Stars and distances: Hipparcos via d3-celestial and the HYG database (CC BY-SA 4.0). Pointing accuracy depends on your phone's compass (typically ±5–10°); tap <b>Align</b> on a known object to correct it.</p>
     </div>
   </section>

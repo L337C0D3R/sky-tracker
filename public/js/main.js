@@ -172,6 +172,7 @@ async function init() {
 }
 
 function setLocation(lat, lon, elev, label) {
+  state.locSource = label;
   sky.setLocation(lat, lon, elev);
   state.located = true;
   state.locLabel = label;
@@ -198,11 +199,13 @@ function startGps() {
       }
       const text = `${acc} · ${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
       // ~100 m moves matter for low satellites; ignore jitter below that.
+      state.gps = { lat, lon, acc: accuracy, at: Date.now() };
       if (state.locLabel?.startsWith('GPS') && Math.abs(prev.latitude - lat) < 0.001 && Math.abs(prev.longitude - lon) < 0.001) {
         state.locLabel = acc;
         $('loc').textContent = text;
         return;
       }
+      state.gps = { lat, lon, acc: accuracy, at: Date.now() };
       setLocation(lat, lon, altitude || 0, acc);
       $('loc').textContent = text;
       save('loc', { lat, lon, elev: altitude || 0 });
@@ -283,6 +286,7 @@ function maybeShowInstallHint() {
   setTimeout(() => {
     if (state.mode && !$('splash').classList.contains('hidden')) return;
     $('iosHint').classList.remove('hidden');
+    setTimeout(() => $('iosHint').classList.add('hidden'), 15000);
   }, 8000);
 }
 
@@ -386,6 +390,7 @@ function enter(mode) {
   state.mode = mode;
   $('splash').classList.add('hidden');
   ['hud', 'toolbar', 'crosshair', 'zoomCtl'].forEach((id) => $(id).classList.remove('hidden'));
+  document.body.classList.add('app-on');
   resize();
   if (mode === 'map' && orient.basis) Object.assign(orient.view, orient.pointing());
   orient.mode = mode === 'ar' ? 'sensor' : 'manual';
@@ -498,6 +503,7 @@ function updateSatellites(date, now) {
   for (const s of sat.near) if (dot(s.e, B.fwd) > cosLim) vis.push(s);
   const t = state.target;
   if (t?.kind === 'satellite' && !vis.includes(t)) vis.push(t);
+  if (state.nearest) for (const s of state.top10 || []) if (!vis.includes(s)) vis.push(s);
   const d = currentObject();
   if (d?.kind === 'satellite' && !vis.includes(d)) vis.push(d);
   sky.updateFast(date, vis);
@@ -544,6 +550,7 @@ function draw(now) {
   const zs = clamp(Math.sqrt(state.f / 700), 0.8, 2.2);
 
   drawGround(ar);
+  if (state.nearest) { drawNearest(zs); drawTarget(now); return; }
   if (state.layers.grid) drawGrid();
   if (state.layers.constellations) drawConstellations(ar);
 
@@ -822,6 +829,132 @@ function drawTarget(now) {
   }
 }
 
+// What's under the crosshair
+function crosshairReadout() {
+  const c = state.center?.o;
+  const ret = $('reticle');
+  if (c && c !== state.target) {
+    const extra = c.kind === 'satellite' ? `${fmtDist(c)} from you · ${Math.round(c.height)} km up`
+      : `${c.kind === 'star' ? 'Star' : c.type}${fmtDist(c, true) !== '—' ? ` · ${fmtDist(c, true)} from you` : ''}`;
+    ret.innerHTML = `<b>${escapeHtml(displayName(c))}</b> · <span class="muted">${escapeHtml(extra)}</span>`;
+    ret.classList.remove('hidden');
+  } else ret.classList.add('hidden');
+
+}
+
+// ---------------- Nearest 10 satellites ----------------
+function updateTop10() {
+  // 10 smallest slant ranges among every tracked satellite (all ranges are refreshed ~3×/s).
+  const best = [];
+  for (const s of sky.satellites) {
+    if (s.dead || s.range == null) continue;
+    if (best.length < 10) { best.push(s); best.sort((a, b) => a.range - b.range); }
+    else if (s.range < best[9].range) { best[9] = s; best.sort((a, b) => a.range - b.range); }
+  }
+  state.top10 = best;
+}
+
+function setNearest(on) {
+  state.nearest = on;
+  document.body.classList.toggle('focus', on);
+  $('btnNear').classList.toggle('on', on);
+  $('nearPanel').classList.toggle('hidden', !on);
+  if (on) {
+    for (const id of ['search', 'settings']) $(id).classList.add('hidden');
+    updateTop10();
+    renderNearPanel();
+    toast('Showing only the 10 nearest satellites. Tap the button again to show everything.', 4000);
+  } else if (!state.target || state.target.kind === 'satellite') {
+    lastLive = 0;
+  }
+}
+
+function renderNearPanel() {
+  const list = state.top10 || [];
+  $('nearList').innerHTML = list.map((s, i) => {
+    const rr = s.rangeRate;
+    const trend = rr == null ? '' : rr < 0 ? `<span class="up">▼ ${Math.abs(rr).toFixed(1)}</span>` : `<span class="down">▲ ${rr.toFixed(1)}</span>`;
+    return `<li data-i="${i}" class="${s === state.target ? 'sel' : ''}">
+      <span class="rank">${i + 1}</span>
+      <span class="nm"><b>${escapeHtml(satName(s.name))}</b><span>${Math.round(s.height)} km up · ${s.alt > 0 ? `${s.alt.toFixed(0)}° ${cardinal(s.az)}` : 'below horizon'}${s.sunlit ? ' · sunlit' : ''}</span></span>
+      <span class="dist"><b>${Math.round(s.range).toLocaleString()} km</b>${trend ? `<span>${trend} km/s</span>` : ''}</span></li>`;
+  }).join('') || '<li class="muted">Loading satellites…</li>';
+  $('nearList').onclick = (ev) => {
+    const li = ev.target.closest('li[data-i]');
+    if (!li) return;
+    const s = list[+li.dataset.i];
+    selectTarget(s, true);
+    openDetails(s);
+  };
+}
+
+function edgeArrow(e, col, label) {
+  const { W, H } = state;
+  const z = dot(e, B.fwd), x = dot(e, B.right), y = dot(e, B.up);
+  let ang = Math.atan2(-y, x);
+  if (z < 0 && Math.hypot(x, y) < 0.05) ang = -Math.PI / 2;
+  const top = 175, bottom = H - 120;
+  const cx = W / 2, cy = (top + bottom) / 2, rx = W / 2 - 34, ry = (bottom - top) / 2;
+  const c = Math.cos(ang), s = Math.sin(ang);
+  const k = Math.min(Math.abs(rx / (c || 1e-6)), Math.abs(ry / (s || 1e-6)));
+  const ax = cx + c * k, ay = cy + s * k;
+  ctx.save();
+  ctx.translate(ax, ay); ctx.rotate(ang);
+  ctx.fillStyle = col; ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-6, -8); ctx.lineTo(-3, 0); ctx.lineTo(-6, 8); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.textAlign = 'center';
+  text(label, ax - c * 20, ay - s * 20 + 4, col, 11, 700);
+  ctx.textAlign = 'left';
+}
+
+// Focus mode: nothing but the horizon and the 10 nearest satellites (ranked, with paths).
+function drawNearest(zs) {
+  const list = state.top10 || [];
+  list.forEach((s, i) => {
+    if (s.dead) return;
+    const col = s.type === 'Space station' ? SAT_COLORS.station : i === 0 ? '#ffffff' : SAT_COLORS.other;
+    drawTrajectory(s, s === state.target, col, true);
+    const p = project(s.e);
+    if (!onScreen(p, 0)) { edgeArrow(s.e, col, `#${i + 1}`); return; }
+    if (s.trail?.length > 1) {
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      let prev = null;
+      s.trail.forEach((e, k) => {
+        const q = project(e);
+        if (q && prev) { ctx.globalAlpha = (k / s.trail.length) * 0.7; ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); }
+        prev = q;
+      });
+      ctx.globalAlpha = 1;
+    }
+    const r = 5 * zs;
+    ctx.globalAlpha = s.alt < 0 ? 0.5 : 1;
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = s.sunlit ? 16 : 4;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
+    ctx.shadowBlur = 0;
+    if (!s.sunlit) { ctx.fillStyle = '#04060d'; ctx.beginPath(); ctx.arc(p[0], p[1], r * 0.5, 0, 7); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    considerCenter(s, p, r);
+    pill(`#${i + 1} ${satName(s.name)} · ${Math.round(s.range).toLocaleString()} km`, p[0] + r + 6, p[1], col, s.alt < 0 ? 0.6 : 1, 11.5, i < 3);
+  });
+}
+
+// ---------------- Location check ----------------
+function updateLocInfo() {
+  if ($('settings').classList.contains('hidden')) return;
+  const o = sky.observer;
+  const g = state.gps;
+  let src;
+  if (g && Date.now() - g.at < 120000) {
+    const age = Math.round((Date.now() - g.at) / 1000);
+    src = `From your phone’s GPS, accurate to ±${g.acc < 1000 ? `${Math.round(g.acc)} m` : `${(g.acc / 1000).toFixed(1)} km`}, updated ${age}s ago.`;
+    if (g.acc > 1000) src += ' This is approximate. Turn on Precise Location for this browser.';
+  } else src = `Source: ${state.locSource || 'unknown'}. Tap “Use GPS” for your exact position.`;
+  $('locInfo').textContent = `${o.latitude.toFixed(5)}°, ${o.longitude.toFixed(5)}° · ${src}`;
+  const ll = `${o.latitude.toFixed(6)},${o.longitude.toFixed(6)}`;
+  $('locMap').href = IS_IOS ? `https://maps.apple.com/?ll=${ll}&q=${encodeURIComponent('SkyTracker position')}` : `https://www.google.com/maps/search/?api=1&query=${ll}`;
+}
+
 // ---------------- Trajectories ----------------
 function getTraj(o) {
   const ttl = o.kind === 'satellite' ? 2000 : 30000;
@@ -835,10 +968,10 @@ const hhmm = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit
 
 // Draws an object's path across your sky: past = solid & faded, future = dashed,
 // below-horizon parts dimmed; time ticks, rise/set labels and a direction arrow.
-function drawTrajectory(o, strong) {
+function drawTrajectory(o, strong, colour = null, compact = false) {
   const tr = getTraj(o);
   if (tr.pts.length < 2) return;
-  const col = colorOf(o);
+  const col = colour || colorOf(o);
   const nowMs = Date.now();
   const maxJump = Math.max(state.W, state.H) * 1.5;
   const P = tr.pts.map((pt) => project(pt.e));
@@ -877,7 +1010,7 @@ function drawTrajectory(o, strong) {
     ctx.globalAlpha = pt.alt < 0 ? 0.35 : 0.95;
     ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(p[0], p[1], strong ? 3 : 2.5, 0, 7); ctx.fill();
-    if (canLabel(p)) { labels.push(p); text(label, p[0] + 6, p[1] - 6, col, 10.5, 600); }
+    if ((!compact || strong) && canLabel(p)) { labels.push(p); text(label, p[0] + 6, p[1] - 6, col, 10.5, 600); }
   });
 
   // Rise / set where the path crosses the horizon
@@ -887,7 +1020,7 @@ function drawTrajectory(o, strong) {
     const f = a.alt / (a.alt - b.alt);
     const e = a.e.map((v, k) => v + (b.e[k] - v) * f);
     const p = project(e);
-    if (!onScreen(p, -10)) continue;
+    if (!onScreen(p, -10) || (compact && !strong)) continue;
     const when = new Date(a.t.getTime() + (b.t.getTime() - a.t.getTime()) * f);
     ctx.globalAlpha = 1;
     ctx.fillStyle = col;
@@ -1009,25 +1142,25 @@ function hud(date, now) {
   liveTick(date);
   if (now - lastLive > 500) {
     lastLive = now;
-    const up = sat.near.filter((s) => s.alt > 0);
-    const starlink = up.filter((s) => s.type === 'Starlink satellite').length;
-    const iss = sky.satellites.find((s) => s.norad === '25544');
-    let txt = sky.satellites.length
-      ? `LIVE · ${up.length.toLocaleString()} satellites overhead${starlink ? ` · ${starlink} Starlink` : ''}`
-      : 'Loading satellites…';
-    if (iss && iss.alt > 0) txt = `ISS is overhead now! · ${txt}`;
-    $('liveText').textContent = txt;
+    updateLocInfo();
+    if (state.nearest) {
+      updateTop10();
+      renderNearPanel();
+      const c = state.top10[0];
+      $('liveText').textContent = c ? `NEAREST 10 · closest: ${satName(c.name)} ${fmtDist(c)}` : 'Finding the nearest satellites…';
+    } else {
+      const up = sat.near.filter((s) => s.alt > 0);
+      const starlink = up.filter((s) => s.type === 'Starlink satellite').length;
+      const iss = sky.satellites.find((s) => s.norad === '25544');
+      let txt = sky.satellites.length
+        ? `LIVE · ${up.length.toLocaleString()} satellites overhead${starlink ? ` · ${starlink} Starlink` : ''}`
+        : 'Loading satellites…';
+      if (iss && iss.alt > 0) txt = `ISS is overhead now! · ${txt}`;
+      $('liveText').textContent = txt;
+    }
   }
 
-  // What's under the crosshair
-  const c = state.center?.o;
-  const ret = $('reticle');
-  if (c && c !== state.target) {
-    const extra = c.kind === 'satellite' ? `${fmtDist(c)} from you · ${Math.round(c.height)} km up`
-      : `${c.kind === 'star' ? 'Star' : c.type}${fmtDist(c, true) !== '—' ? ` · ${fmtDist(c, true)} from you` : ''}`;
-    ret.innerHTML = `<b>${escapeHtml(displayName(c))}</b> · <span class="muted">${escapeHtml(extra)}</span>`;
-    ret.classList.remove('hidden');
-  } else ret.classList.add('hidden');
+  crosshairReadout();
 
   const t = state.target;
   if (!t) return;
@@ -1106,6 +1239,7 @@ function selectTarget(o, center = true) {
   state.extraAt = -1e9;
   state.locked = false;
   $('target').classList.toggle('hidden', !o);
+  document.body.classList.toggle('has-target', !!o);
   if (!o) return;
   const col = colorOf(o);
   $('tIcon').style.background = col;
@@ -1179,7 +1313,10 @@ function bindUI() {
   $('startAR').onclick = () => startAR(true);
   $('startMap').onclick = startMap;
   $('btnSearch').onclick = () => openSearch();
-  $('liveChip').onclick = () => openSearch('overhead');
+  $('liveChip').onclick = () => (state.nearest ? $('nearPanel').classList.toggle('collapsed') : openSearch('overhead'));
+  $('btnNear').onclick = () => setNearest(!state.nearest);
+  $('nearHead').onclick = () => $('nearPanel').classList.toggle('collapsed');
+  $('nearOff').onclick = (e) => { e.stopPropagation(); setNearest(false); };
   $('locChip').onclick = () => { $('search').classList.add('hidden'); $('settings').classList.remove('hidden'); };
   setInterval(() => { if (!$('search').classList.contains('hidden')) renderList(); }, 1000);
   $('sClose').onclick = () => $('search').classList.add('hidden');
