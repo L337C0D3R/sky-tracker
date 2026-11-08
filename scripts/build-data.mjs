@@ -24,11 +24,14 @@ if (!process.argv.includes('--skip-stars')) {
   const rows = hyg.split('\n');
   const head = rows[0].replace(/"/g, '').split(',');
   const iHip = head.indexOf('hip'), iDist = head.indexOf('dist');
+  const iSpect = head.indexOf('spect'), iAbs = head.indexOf('absmag');
   const distLy = new Map();
+  const extra = new Map(); // HIP -> [spectral type, absolute magnitude]
   for (const line of rows.slice(1)) {
     const c = line.replace(/"/g, '').split(',');
     const hip = c[iHip], pc = parseFloat(c[iDist]);
     if (hip && pc > 0 && pc < 100000) distLy.set(hip, pc * 3.26156);
+    if (hip) extra.set(hip, [c[iSpect] || '', c[iAbs] !== '' && pc < 100000 ? r(parseFloat(c[iAbs]), 2) : null]);
   }
   const list = stars.features
     .filter((f) => f.properties.mag <= 6)
@@ -37,9 +40,10 @@ if (!process.argv.includes('--skip-stars')) {
       if (ra < 0) ra += 360;
       const n = names[f.id] || {};
       const ly = distLy.get(String(f.id));
-      const row = [r(ra, 4), r(dec, 4), r(f.properties.mag, 2), r(+f.properties.bv || 0.6, 2), ly ? (ly < 100 ? r(ly, 1) : Math.round(ly)) : 0];
-      if (n.name) row.push(n.name, n.c || '');
-      return row;
+      const [spect, absmag] = extra.get(String(f.id)) || ['', null];
+      // [ra, dec, mag, B-V, dist ly, HIP, spectral type, abs mag, proper name, constellation, Bayer/Flamsteed]
+      return [r(ra, 4), r(dec, 4), r(f.properties.mag, 2), r(+f.properties.bv || 0.6, 2), ly ? (ly < 100 ? r(ly, 1) : Math.round(ly)) : 0,
+        f.id, spect, absmag, n.name || '', n.c || '', n.bayer || n.flam || ''];
     })
     .sort((a, b) => a[2] - b[2]);
   await writeFile(new URL('stars.json', OUT), JSON.stringify(list));

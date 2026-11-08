@@ -6,6 +6,8 @@ Point your phone at the sky and get guided to planets, stars, satellites and ast
 
 ## Features
 - **AR camera mode**: the back camera with sky labels on top, driven by the phone's compass, gyro and accelerometer. Pick a target and arrows tell you which way to turn and tilt. The phone vibrates when the target is centred.
+- **Night camera**: Auto, Night sky and Max boost presets. Where the browser allows it (Android Chrome), you also get shutter speed, ISO, exposure compensation, frame rate, focus locked at infinity and white balance. A software boost (gain, contrast and frame stacking for noise reduction) works on every phone, including iPhone.
+- **Details for anything you tap**: live position and distance; for satellites, owner, launch date and site, orbit and the next passes with visibility; for planets, rise/transit/set, constellation, apparent size and moon phases; for stars, spectral type, temperature and luminosity. Wikipedia summaries are included where available.
 - **Sky map mode** for desktop or phones without motion sensors: drag, pinch or scroll to look around.
 - **Planets, Sun, Moon and Pluto** from [Astronomy Engine](https://github.com/cosinekitty/astronomy) (VSOP87/ELP, about ±1″), with rise and set times.
 - **Asteroids** (Ceres, Vesta, Pallas, Apophis, Bennu, Eros…) propagated from *today's* osculating elements from NASA/JPL Horizons, with light-time and parallax corrections. Checked against Horizons to within about 0.005°.
@@ -22,6 +24,7 @@ Static site in `public/` plus Cloudflare Pages Functions in `functions/api/`:
 |---|---|
 | `/api/tle?group=stations` | CelesTrak TLE proxy (adds CORS), edge-cached 2 h |
 | `/api/asteroids` | JPL Horizons osculating elements for today, edge-cached 12 h |
+| `/api/satcat?id=25544` | CelesTrak SATCAT record (owner, launch, size), edge-cached 1 day |
 | `/api/whereami` | Approximate location from Cloudflare's IP geolocation, used until GPS responds |
 
 ## Develop

@@ -1,5 +1,7 @@
 import { Sky, enu } from './sky.js';
 import { Orientation, wrap180, dot, load, save } from './orient.js';
+import { initDetails, openDetails, closeDetails, updateLive, isOpen as detailsOpen } from './details.js';
+import * as camctl from './camctl.js';
 
 const $ = (id) => document.getElementById(id);
 const D2R = Math.PI / 180;
@@ -37,7 +39,7 @@ const state = {
   W: 0, H: 0, f: 1,
 };
 const sat = { cursor: 0, building: [], near: [], vis: [] };
-const cam = { stream: null, track: null, hw: null, hwZoom: 1, pending: false, error: null };
+const cam = { stream: null, track: null, error: null };
 
 // ---------------- Helpers ----------------
 function toast(msg, ms = 3500) {
@@ -73,7 +75,14 @@ async function init() {
   addEventListener('resize', resize);
   splashStars();
   bindUI();
+  camctl.initCamControls(video, $('camfx'), { onZoom: () => cssZoom() });
   await sky.loadStatic();
+  const consNames = Object.fromEntries(sky.constellations.map((c) => [c.id, c.name]));
+  initDetails({
+    sky, displayName, colorOf, cardinal, fmtDist, lightTime,
+    consName: (id) => consNames[id] || id,
+    onGuide: (o) => selectTarget(o, true),
+  });
   const saved = load('loc', null);
   if (saved) setLocation(saved.lat, saved.lon, saved.elev || 0, 'last GPS fix');
   else {
@@ -169,10 +178,20 @@ async function startCamera() {
   video.srcObject = stream;
   await video.play().catch(() => {});
   cam.track = stream.getVideoTracks()[0];
-  const caps = cam.track.getCapabilities?.() || {};
-  cam.hw = caps.zoom && caps.zoom.max > 1 ? { min: Math.max(1, caps.zoom.min), max: caps.zoom.max } : null;
-  cam.hwZoom = 1;
   cam.error = null;
+  camctl.cameraStarted(cam.track);
+  cam.track.addEventListener('ended', () => { cam.error = Object.assign(new Error('the camera stopped'), { name: 'Ended' }); cam.stream = null; });
+  // Some browsers start the stream but never paint a frame until another play() call.
+  setTimeout(async () => {
+    if (state.mode !== 'ar' || video.videoWidth) return;
+    await video.play().catch(() => {});
+    setTimeout(() => {
+      if (state.mode === 'ar' && !video.videoWidth) {
+        cam.error = Object.assign(new Error('the camera started but sent no picture. Close other camera apps and retry.'), { name: 'NoFrames' });
+        showCamBanner();
+      }
+    }, 1500);
+  }, 2500);
 }
 
 function cameraErrorText(e) {
@@ -230,8 +249,9 @@ function enter(mode) {
   if (mode === 'map' && orient.basis) Object.assign(orient.view, orient.pointing());
   orient.mode = mode === 'ar' ? 'sensor' : 'manual';
   state.arSince = performance.now();
-  video.style.display = mode === 'ar' ? 'block' : 'none';
+  camctl.show(mode === 'ar');
   if (mode === 'ar') $('camBanner').classList.add('hidden');
+  else $('camSheet').classList.add('hidden');
   if (mode === 'map') $('btnSensors').classList.add('hidden');
   $('modeLabel').textContent = mode === 'ar' ? 'Sky map' : 'Camera';
   $('icoMode').innerHTML = mode === 'ar'
@@ -256,18 +276,11 @@ function setZoom(z) {
 // Optical/sensor zoom when the camera supports it, CSS digital zoom for the rest.
 // The overlay's focal length is scaled by the same total factor, so labels stay on target.
 function applyCameraZoom() {
-  const z = state.zoom;
-  if (cam.hw && cam.track && !cam.pending) {
-    const want = clamp(z, cam.hw.min, cam.hw.max);
-    if (Math.abs(want - cam.hwZoom) > 0.02) {
-      cam.pending = true;
-      cam.track.applyConstraints({ advanced: [{ zoom: want }] })
-        .then(() => { cam.hwZoom = want; })
-        .catch(() => { cam.hw = null; cam.hwZoom = 1; })
-        .finally(() => { cam.pending = false; applyCameraZoom(); });
-    }
-  }
-  video.style.transform = `scale(${z / cam.hwZoom})`;
+  camctl.setHwZoom(state.zoom);
+  cssZoom();
+}
+function cssZoom() {
+  camctl.setCss(`scale(${state.zoom / camctl.hwZoomApplied()})`);
 }
 
 // ---------------- Projection ----------------
@@ -316,6 +329,7 @@ function frame(now) {
   B = orient.update(state.mode === 'ar' ? state.zoom : 1);
   state.f = focal();
   updateSatellites(date, now);
+  if (state.mode === 'ar') camctl.frame(now);
   state.center = null;
   draw(now);
   hud(date, now);
@@ -765,6 +779,7 @@ function hud(date, now) {
   drawTape(pt.az);
 
   if (now - lastLive > 500) {
+    updateLive();
     lastLive = now;
     const up = sat.near.filter((s) => s.alt > 0);
     const starlink = up.filter((s) => s.type === 'Starlink satellite').length;
@@ -915,12 +930,14 @@ function renderList() {
     const li = ev.target.closest('li[data-i]');
     if (!li) return;
     selectTarget(items[+li.dataset.i]);
+    openDetails(items[+li.dataset.i]);
     $('search').classList.add('hidden');
   };
 }
 
 function openSearch(f) {
   $('settings').classList.add('hidden');
+  closeDetails();
   $('search').classList.remove('hidden');
   if (f) {
     filter = f;
@@ -946,7 +963,8 @@ function bindUI() {
     [...$('chips').children].forEach((c) => c.classList.toggle('on', c === b));
     renderList();
   };
-  $('btnSettings').onclick = () => { $('search').classList.add('hidden'); $('settings').classList.toggle('hidden'); };
+  $('btnSettings').onclick = () => { $('search').classList.add('hidden'); closeDetails(); $('settings').classList.toggle('hidden'); };
+  $('tInfo').onclick = () => state.target && openDetails(state.target);
   $('setClose').onclick = () => $('settings').classList.add('hidden');
   $('tClose').onclick = () => selectTarget(null);
   $('tMore').onclick = () => {
@@ -1020,6 +1038,7 @@ function bindUI() {
   const pointers = new Map();
   let dragStart = null, pinch0 = null, moved = false;
   canvas.addEventListener('pointerdown', (e) => {
+    if (state.mode === 'ar' && video.paused && cam.stream) video.play().catch(() => {});
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     moved = pointers.size > 1;
@@ -1070,14 +1089,19 @@ function bindUI() {
 
 function pick(x, y) {
   let best = null, bd = 30;
-  const cands = [...sky.planets, ...sky.asteroids, ...sat.vis.filter((s) => s.alt > 0), ...sky.stars.filter((s) => s.name && s.mag < 4.5)];
+  const cands = [...sky.planets, ...sky.asteroids, ...sat.vis.filter((s) => s.alt > 0 && !s.dead), ...sky.stars.filter((s) => s.name && s.mag < 5)];
   for (const o of cands) {
     const p = project(o.e);
     if (!p) continue;
     const d = Math.hypot(p[0] - x, p[1] - y) - (o.kind === 'planet' ? 6 : 0);
     if (d < bd) { bd = d; best = o; }
   }
-  if (best) selectTarget(best, false);
+  if (best) {
+    selectTarget(best, false);
+    $('search').classList.add('hidden');
+    $('settings').classList.add('hidden');
+    openDetails(best);
+  }
 }
 
 function alignOn(t) {

@@ -16,6 +16,7 @@
 </head>
 <body>
   <video id="cam" playsinline muted autoplay></video>
+  <canvas id="camfx"></canvas>
   <canvas id="sky"></canvas>
 
   <!-- HUD -->
@@ -37,6 +38,9 @@
   <div id="crosshair" class="hidden"><i></i><i></i><i></i><i></i></div>
   <div id="reticle" class="hidden"></div>
 
+  <button id="camBtn" class="hidden" aria-label="Night camera settings">
+    <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg><span>Night</span>
+  </button>
   <div id="zoomCtl" class="hidden">
     <button id="zIn" aria-label="Zoom in">+</button>
     <button id="zoomVal" aria-label="Reset zoom">1×</button>
@@ -65,7 +69,8 @@
         <div id="tName"></div>
         <div id="tType"></div>
       </div>
-      <button id="tMore" class="icon" aria-label="Details">▾</button>
+      <button id="tInfo" class="info-btn" aria-label="More information">Details</button>
+      <button id="tMore" class="icon" aria-label="Expand">▾</button>
       <button id="tClose" class="icon" aria-label="Clear target">✕</button>
     </div>
     <div id="tGuide" class="guide"></div>
@@ -78,6 +83,38 @@
         <button id="tAlign" class="ghost">It's centred: align compass</button>
       </div>
     </div>
+  </section>
+
+  <!-- Night camera sheet -->
+  <section id="camSheet" class="sheet hidden">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Night camera</h2><button id="camClose" class="icon" aria-label="Close">✕</button></div>
+    <div class="set-body">
+      <div id="camPresets" class="presets">
+        <button data-p="auto"><b>Auto</b><span>Normal camera</span></button>
+        <button data-p="night"><b>Night sky</b><span>Long shutter, high ISO</span></button>
+        <button data-p="max"><b>Max boost</b><span>Faintest; hold steady</span></button>
+      </div>
+      <div id="camNow" class="cam-now"></div>
+      <div id="camErr" class="small" style="color: var(--warn)"></div>
+      <h3>Camera hardware</h3>
+      <div id="camHw"></div>
+      <h3>Software boost <span class="muted small">works on every phone</span></h3>
+      <div id="camSwBox"></div>
+      <p class="muted small about">A phone camera in live video can show bright stars and planets, the Moon, and bright satellites such as the ISS, Tiangong and fresh Starlink “trains”. For the best chance, use <b>Night sky</b>, rest the phone on something steady, and look 1–2 hours after sunset or before sunrise, when satellites are still in sunlight but your sky is dark. Fainter satellites won’t show on camera, but the overlay still marks exactly where each one is.</p>
+    </div>
+  </section>
+
+  <!-- Details sheet -->
+  <section id="details" class="sheet hidden">
+    <div class="grab"></div>
+    <div class="d-head">
+      <span id="dIcon" class="t-icon"></span>
+      <div class="t-title"><div id="dName"></div><div id="dType"></div></div>
+      <button id="dClose" class="icon" aria-label="Close">✕</button>
+    </div>
+    <div id="dBody" class="d-body"></div>
+    <div class="d-foot"><button id="dGuide" class="primary">Guide me to it</button></div>
   </section>
 
   <!-- Search panel -->
@@ -146,7 +183,7 @@
       </ul>
       <button id="startAR" class="primary">Open camera</button>
       <button id="startMap" class="link">Use sky map without camera</button>
-      <p id="splashMsg" class="muted small">Uses your camera, motion sensors and location. Nothing leaves your device.</p>
+      <p id="splashMsg" class="muted small">Uses your camera, motion sensors and location. Your location never leaves your device.</p>
     </div>
   </section>
 

@@ -6,6 +6,21 @@ import * as S from '../vendor/satellite.js';
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
 const C_AU_PER_DAY = 173.1446326846693;
+const AU_KM = 149597870.7;
+const BODY_RADIUS_KM = {
+  Sun: 695700, Moon: 1737.4, Mercury: 2439.7, Venus: 6051.8, Mars: 3389.5, Jupiter: 69911, Saturn: 58232,
+  Uranus: 25362, Neptune: 24622, Pluto: 1188.3,
+};
+function moonPhaseName(a) {
+  if (a < 6 || a > 354) return 'New Moon';
+  if (a < 84) return 'Waxing crescent';
+  if (a < 96) return 'First quarter';
+  if (a < 174) return 'Waxing gibbous';
+  if (a < 186) return 'Full Moon';
+  if (a < 264) return 'Waning gibbous';
+  if (a < 276) return 'Last quarter';
+  return 'Waning crescent';
+}
 
 // ENU unit vector (x=east, y=north, z=up) from az (clockwise from N) / alt, degrees.
 export function enu(az, alt) {
@@ -42,11 +57,12 @@ export class Sky {
       fetch('data/constellations.json').then((r) => r.json()),
       fetch('data/asteroids.json').then((r) => r.json()),
     ]);
-    this.stars = stars.map(([ra, dec, mag, bv, ly, name, con]) => ({
+    this.stars = stars.map(([ra, dec, mag, bv, ly, hip, spect, absmag, name, con, desig]) => ({
       kind: 'star',
       type: 'Star',
-      name: name || null,
-      con,
+      name: name || (desig && con ? `${desig} ${con}` : null),
+      proper: !!name,
+      con, hip, spect, absmag, desig, ra: ra / 15, dec,
       ly: ly || null, // distance in light-years
       mag,
       bv,
@@ -115,7 +131,7 @@ export class Sky {
       sats.push({
         kind: 'satellite',
         type: /STARLINK/.test(name) ? 'Starlink satellite' : /ISS|CSS|TIANHE|TIANGONG/.test(name) ? 'Space station' : 'Satellite',
-        name, norad, satrec, group, az: 0, alt: -90, e: [0, 0, -1], epoch,
+        name, norad, satrec, group, az: 0, alt: -90, e: [0, 0, -1], epoch, intl: l1.slice(9, 17).trim(),
       });
     }
     this.satGroups.set(group, sats);
@@ -136,7 +152,7 @@ export class Sky {
       ...(this.planets || []),
       ...this.asteroids,
       ...this.satellites,
-      ...this.stars.filter((s) => s.name),
+      ...this.stars.filter((s) => s.proper || (s.name && s.mag < 4.5)),
     ];
   }
 
@@ -275,6 +291,116 @@ export class Sky {
     const th = Math.tan(ph / 2);
     const phi1 = Math.exp(-3.33 * th ** 0.63), phi2 = Math.exp(-1.87 * th ** 1.22);
     a.mag = a.el.H + 5 * Math.log10(r * dist) - 2.5 * Math.log10((1 - a.el.G) * phi1 + a.el.G * phi2);
+  }
+
+  // ---------- Details ----------
+  // Extra live facts for Sun / Moon / planets.
+  bodyInfo(obj, date) {
+    const t = A.MakeTime(date);
+    const out = {};
+    const eq = A.Equator(obj.body, t, this.observer, true, true);
+    try { out.constellation = A.Constellation(eq.ra, eq.dec).name; } catch { /* */ }
+    const R = BODY_RADIUS_KM[obj.name];
+    if (R) out.angularDiam = 2 * Math.atan(R / (eq.dist * AU_KM)) * R2D * 3600; // arcsec
+    if (obj.name !== 'Sun') {
+      try { const el = A.Elongation(obj.body, t); out.elongation = el.elongation; out.visibility = el.visibility; } catch { /* */ }
+    }
+    try {
+      const tr = A.SearchHourAngle(obj.body, this.observer, 0, t, +1);
+      out.transit = tr.time.date;
+      out.transitAlt = tr.hor.altitude;
+    } catch { /* */ }
+    const rise = A.SearchRiseSet(obj.body, this.observer, +1, t, 2);
+    const set = A.SearchRiseSet(obj.body, this.observer, -1, t, 2);
+    out.rise = rise?.date;
+    out.set = set?.date;
+    if (obj.name === 'Moon') {
+      out.phaseName = moonPhaseName(A.MoonPhase(t));
+      out.ageDays = A.MoonPhase(t) / 360 * 29.530588;
+      const qs = [];
+      let mq = A.SearchMoonQuarter(t);
+      for (let i = 0; i < 4; i++) { qs.push({ name: ['New Moon', 'First Quarter', 'Full Moon', 'Last Quarter'][mq.quarter], date: mq.time.date }); mq = A.NextMoonQuarter(mq); }
+      out.quarters = qs;
+    }
+    if (obj.name === 'Sun') {
+      const tw = (alt, dir) => A.SearchAltitude(A.Body.Sun, this.observer, dir, t, 1, alt)?.date;
+      out.civilDusk = tw(-6, -1);
+      out.astroDusk = tw(-18, -1);
+      out.astroDawn = tw(-18, +1);
+      out.civilDawn = tw(-6, +1);
+    }
+    return out;
+  }
+
+  // Orbit parameters straight from the TLE.
+  static orbit(sat) {
+    const r = sat.satrec;
+    const period = (2 * Math.PI) / r.no; // minutes
+    const n = r.no / 60; // rad/s
+    const a = Math.cbrt(398600.4418 / (n * n));
+    let launchYear = null;
+    if (/^\d{2}/.test(sat.intl || '')) { const yy = +sat.intl.slice(0, 2); launchYear = yy < 57 ? 2000 + yy : 1900 + yy; }
+    return {
+      period,
+      revsPerDay: 1440 / period,
+      inclination: r.inclo * R2D,
+      eccentricity: r.ecco,
+      apogee: a * (1 + r.ecco) - 6378.137,
+      perigee: a * (1 - r.ecco) - 6378.137,
+      semiMajor: a,
+      launchYear,
+      intl: sat.intl ? `${launchYear}-${sat.intl.slice(2)}` : null,
+    };
+  }
+
+  _satAt(sat, d) {
+    const pv = S.propagate(sat.satrec, d);
+    if (!pv?.position) return null;
+    const gmst = S.gstime(d);
+    const look = S.ecfToLookAngles(this.gd, S.eciToEcf(pv.position, gmst));
+    return { el: look.elevation * R2D, az: look.azimuth * R2D, range: look.rangeSat, p: pv.position };
+  }
+
+  _sunlitAt(p, d) {
+    const sv = A.GeoVector(A.Body.Sun, A.MakeTime(d), true);
+    const l = Math.hypot(sv.x, sv.y, sv.z), sh = [sv.x / l, sv.y / l, sv.z / l];
+    const dd = p.x * sh[0] + p.y * sh[1] + p.z * sh[2];
+    return dd > 0 || Math.hypot(p.x - dd * sh[0], p.y - dd * sh[1], p.z - dd * sh[2]) > 6378;
+  }
+
+  sunAltAt(d) {
+    const t = A.MakeTime(d);
+    const eq = A.Equator(A.Body.Sun, t, this.observer, true, true);
+    return A.Horizon(t, this.observer, eq.ra, eq.dec, null).altitude;
+  }
+
+  // Upcoming passes above `minEl`° within `hours`. A pass is "visible" when the
+  // satellite is sunlit at its highest point while your sky is dark (Sun < −6°).
+  passes(sat, date, hours = 48, max = 5, minEl = 10) {
+    const out = [];
+    const t0 = date.getTime();
+    let cur = null;
+    for (let s = 0; s <= hours * 3600 && out.length < max; s += 20) {
+      const d = new Date(t0 + s * 1000);
+      const st = this._satAt(sat, d);
+      if (!st) break;
+      if (st.el >= minEl) {
+        if (!cur) cur = { start: d, startAz: st.az, peak: st, peakT: d, ongoing: s === 0 };
+        if (st.el > cur.peak.el) { cur.peak = st; cur.peakT = d; }
+      } else if (cur) {
+        cur.end = d;
+        cur.endAz = st.az;
+        cur.maxEl = cur.peak.el;
+        cur.peakAz = cur.peak.az;
+        cur.sunlit = this._sunlitAt(cur.peak.p, cur.peakT);
+        cur.dark = this.sunAltAt(cur.peakT) < -6;
+        cur.visible = cur.sunlit && cur.dark;
+        delete cur.peak;
+        out.push(cur);
+        cur = null;
+      }
+    }
+    return out;
   }
 
   // ---------- Events ----------
