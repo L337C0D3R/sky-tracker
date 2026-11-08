@@ -88,13 +88,14 @@ export class Sky {
     } catch { /* offline / local dev: keep baked elements */ }
   }
 
-  async loadSatGroup(group) {
-    if (this.satGroups.has(group)) return this.satGroups.get(group).length;
-    const r = await fetch(`api/tle?group=${group}`);
+  async loadSatGroup(group, refresh = false) {
+    if (this.satGroups.has(group) && !refresh) return this.satGroups.get(group).length;
+    const r = await fetch(`api/tle?group=${group}`, refresh ? { cache: 'no-cache' } : undefined);
     if (!r.ok) throw new Error(`TLE ${group}: ${r.status}`);
     const lines = (await r.text()).split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean);
     const sats = [];
-    const seen = new Set(this.satellites.map((s) => s.norad));
+    const old = new Map((this.satGroups.get(group) || []).map((s) => [s.norad, s]));
+    const seen = new Set(this.satellites.filter((s) => s.group !== group).map((s) => s.norad));
     for (let i = 0; i + 2 < lines.length + 1; i += 3) {
       const [n, l1, l2] = [lines[i], lines[i + 1], lines[i + 2]];
       if (!l1?.startsWith('1 ') || !l2?.startsWith('2 ')) continue;
@@ -103,14 +104,21 @@ export class Sky {
       seen.add(norad);
       const satrec = S.twoline2satrec(l1, l2);
       const name = n.trim();
+      const epoch = new Date((satrec.jdsatepoch - 2440587.5) * 86400000);
+      const prev = old.get(norad);
+      if (prev) { // keep the same object (it may be the selected target), swap in the fresh orbit
+        Object.assign(prev, { satrec, epoch, dead: false });
+        sats.push(prev);
+        continue;
+      }
       sats.push({
         kind: 'satellite',
         type: /STARLINK/.test(name) ? 'Starlink satellite' : /ISS|CSS|TIANHE|TIANGONG/.test(name) ? 'Space station' : 'Satellite',
-        name, norad, satrec, group, az: 0, alt: -90, e: [0, 0, -1],
-        epoch: new Date((satrec.jdsatepoch - 2440587.5) * 86400000),
+        name, norad, satrec, group, az: 0, alt: -90, e: [0, 0, -1], epoch,
       });
     }
     this.satGroups.set(group, sats);
+    this.tleLoadedAt = Date.now();
     this.satellites = [...this.satGroups.values()].flat();
     this.rebuildIndex();
     return sats.length;
@@ -165,21 +173,32 @@ export class Sky {
     for (const a of this.asteroids) this._asteroid(a, t, earth, obsVec, rot);
   }
 
-  // Fast update (~10 Hz): satellites move ~1°/s.
-  updateFast(date) {
-    if (!this.gd || !this.satellites.length) return;
+  // Satellites: SGP4 for `list` at `date`. Called every animation frame for the
+  // satellites near/above the horizon, and twice a second for the full catalogue.
+  updateFast(date, list = this.satellites) {
+    if (!this.gd || !list.length) return;
     const gmst = S.gstime(date);
     const sun = this.sunEqj; // AU, EQJ ~ TEME for a shadow test
     const sl = sun ? Math.hypot(sun.x, sun.y, sun.z) : 1;
     const sh = sun ? [sun.x / sl, sun.y / sl, sun.z / sl] : [1, 0, 0];
-    for (const s of this.satellites) {
+    const tMs = date.getTime();
+    for (const s of list) {
       const pv = S.propagate(s.satrec, date);
       if (!pv || !pv.position) { s.alt = -90; s.dead = true; continue; }
       const p = pv.position;
       const look = S.ecfToLookAngles(this.gd, S.eciToEcf(p, gmst));
       s.az = look.azimuth * R2D;
       s.alt = look.elevation * R2D;
+      // Range rate (km/s, + = receding), smoothed over successive updates.
+      if (s._t && tMs - s._t > 40 && tMs - s._t < 5000) {
+        const rr = (look.rangeSat - s._r) / ((tMs - s._t) / 1000);
+        s.rangeRate = s.rangeRate == null ? rr : s.rangeRate + (rr - s.rangeRate) * 0.3;
+      }
+      if (!s._t || tMs - s._t > 40) { s._t = tMs; s._r = look.rangeSat; }
       s.range = look.rangeSat;
+      const geo = S.eciToGeodetic(p, gmst);
+      s.lat = S.degreesLat(geo.latitude);
+      s.lon = S.degreesLong(geo.longitude);
       s.e = enu(s.az, s.alt);
       // Cylindrical Earth-shadow test.
       const d = p.x * sh[0] + p.y * sh[1] + p.z * sh[2];

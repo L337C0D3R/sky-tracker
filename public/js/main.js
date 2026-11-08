@@ -26,6 +26,7 @@ const state = {
   mapFov: 70, // degrees vertical in sky-map mode
   lastSlow: 0,
   lastFast: 0,
+  nearSats: [],
   located: false,
   locked: false,
   extraAt: 0,
@@ -74,27 +75,52 @@ function startGps() {
   if (!navigator.geolocation) return toast('Geolocation not available');
   navigator.geolocation.watchPosition(
     (p) => {
-      const { latitude: lat, longitude: lon, altitude } = p.coords;
+      const { latitude: lat, longitude: lon, altitude, accuracy } = p.coords;
       const prev = sky.observer;
-      if (state.locLabel === 'GPS' && Math.abs(prev.latitude - lat) < 0.01 && Math.abs(prev.longitude - lon) < 0.01) return;
-      setLocation(lat, lon, altitude || 0, 'GPS');
-      save('loc', { lat, lon, elev: altitude || 0, label: 'GPS' });
+      const acc = `GPS ±${accuracy < 1000 ? `${Math.round(accuracy)} m` : `${(accuracy / 1000).toFixed(1)} km`}`;
+      state.gpsAccuracy = accuracy;
+      // ~100 m moves matter for low satellites; ignore jitter below that.
+      if (state.locLabel?.startsWith('GPS') && Math.abs(prev.latitude - lat) < 0.001 && Math.abs(prev.longitude - lon) < 0.001) {
+        state.locLabel = acc;
+        $('loc').textContent = `${acc} · ${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
+        return;
+      }
+      setLocation(lat, lon, altitude || 0, acc);
+      $('loc').textContent = `${acc} · ${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
+      save('loc', { lat, lon, elev: altitude || 0, label: 'GPS (last fix)' });
     },
     (e) => toast(`Location: ${e.message}. Using approximate location; set it under Layers.`),
-    { enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
   );
 }
 
 async function loadGroup(g) {
   try {
     const n = await sky.loadSatGroup(g);
-    $('satStatus').textContent = `${sky.satellites.length} satellites loaded`;
+    satStatus();
     state.lastFast = 0;
     return n;
   } catch (e) {
     $('satStatus').textContent = `Could not load ${g}: ${e.message}`;
   }
 }
+
+function satStatus() {
+  const t = sky.tleLoadedAt ? new Date(sky.tleLoadedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+  $('satStatus').textContent = `${sky.satellites.length} satellites tracked live · orbit data fetched ${t}, refreshed every 2 h`;
+}
+
+// CelesTrak publishes new TLEs every few hours; refresh in place (selected target is kept).
+async function refreshTles() {
+  for (const g of state.satGroups) {
+    try { await sky.loadSatGroup(g, true); } catch { /* keep old elements */ }
+  }
+  satStatus();
+}
+setInterval(refreshTles, 2 * 3600 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && sky.tleLoadedAt && Date.now() - sky.tleLoadedAt > 2 * 3600 * 1000) refreshTles();
+});
 
 async function startAR() {
   $('splashMsg').textContent = 'Requesting permissions…';
@@ -178,7 +204,17 @@ function frame(now) {
   if (!state.located) return;
   const date = new Date();
   if (now - state.lastSlow > 1000) { sky.updateSlow(date); state.lastSlow = now; }
-  if (now - state.lastFast > 100) { sky.updateFast(date); state.lastFast = now; }
+  if (now - state.lastFast > 500) {
+    // Full catalogue twice a second -> who is near/above the horizon.
+    sky.updateFast(date);
+    state.nearSats = sky.satellites.filter((s) => s.alt > -3 && !s.dead);
+    state.lastFast = now;
+  } else {
+    // Every frame: re-propagate the satellites that can be on screen, so they glide smoothly.
+    const live = state.nearSats;
+    if (state.target?.kind === 'satellite' && !live.includes(state.target)) live.push(state.target);
+    sky.updateFast(date, live);
+  }
   if (state.mode === 'ar' && orient.mode === 'manual' && orient.hasSensor) orient.mode = 'sensor';
   if (state.mode === 'ar' && orient.mode === 'sensor' && !orient.raw && now - state.arSince > 4000) orient.mode = 'manual';
   B = orient.update();
@@ -485,7 +521,14 @@ function hud(date, now) {
   ];
   if (t.mag != null && Number.isFinite(t.mag)) stats.push(['Magnitude', t.mag.toFixed(1)]);
   if (t.kind === 'satellite') {
-    stats.push(['Height', `${Math.round(t.height)} km`], ['Speed', `${t.speed?.toFixed(2)} km/s`]);
+    const rr = t.rangeRate;
+    stats.push(
+      ['Height', `${Math.round(t.height)} km`],
+      ['Speed', `${t.speed?.toFixed(2)} km/s`],
+      ['Range rate', rr == null ? '—' : `<span class="${rr < 0 ? 'up' : 'down'}">${rr < 0 ? 'Approaching' : 'Receding'} ${Math.abs(rr).toFixed(2)} km/s</span>`],
+      ['Over (lat, lon)', `${Math.abs(t.lat).toFixed(2)}°${t.lat >= 0 ? 'N' : 'S'}, ${Math.abs(t.lon).toFixed(2)}°${t.lon >= 0 ? 'E' : 'W'}`],
+      ['Lit', t.sunlit ? 'Sunlit' : 'Earth shadow'],
+    );
   }
   if (t.ra != null) stats.push(['RA / Dec', `${t.ra.toFixed(2)}h ${t.dec >= 0 ? '+' : ''}${t.dec.toFixed(1)}°`]);
   $('tStats').innerHTML = stats.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
@@ -527,7 +570,8 @@ function selectTarget(o) {
   $('target').classList.toggle('hidden', !o);
   if (!o) return;
   $('tName').textContent = o.kind === 'satellite' ? shortSat(o.name) : o.name;
-  $('tType').textContent = o.type + (o.kind === 'satellite' ? ` · ${o.group}` : '');
+  $('tType').innerHTML = escapeHtml(o.type + (o.kind === 'satellite' ? ` · ${o.group}` : ''))
+    + (o.kind === 'satellite' ? ' <span class="live">LIVE</span>' : '');
   $('tGoto').classList.toggle('hidden', orient.mode === 'sensor');
   $('tAlign').classList.toggle('hidden', orient.mode !== 'sensor');
   if (orient.mode === 'manual') centerOn(o);
@@ -543,14 +587,11 @@ sky.trackPoints = (s) => {
   const out = [];
   const t0 = Date.now();
   const save = { az: s.az, alt: s.alt, e: s.e, range: s.range, sunlit: s.sunlit, height: s.height, speed: s.speed };
-  const tmp = { ...s };
-  const keep = sky.satellites;
-  sky.satellites = [tmp];
+  const tmp = { satrec: s.satrec };
   for (let dt = -180; dt <= 180; dt += 10) {
-    sky.updateFast(new Date(t0 + dt * 1000));
+    sky.updateFast(new Date(t0 + dt * 1000), [tmp]);
     out.push(tmp.e);
   }
-  sky.satellites = keep;
   Object.assign(s, save);
   return out;
 };
@@ -569,15 +610,17 @@ function renderList() {
   };
   if (q) items = items.filter((o) => score(o) < 9);
   else if (filter === 'up') items = items.filter((o) => o.alt > 0);
-  if (filter !== 'up' && filter !== 'all') items = items.filter((o) => o.kind === filter);
+  else if (filter === 'overhead') items = items.filter((o) => o.kind === 'satellite' && o.alt > 0);
+  if (!['up', 'all', 'overhead'].includes(filter)) items = items.filter((o) => o.kind === filter);
   const rank = { planet: 0, asteroid: 1, satellite: 2, star: 3 };
   items.sort((a, b) => (q ? score(a) - score(b) : 0) || (q && a.norad && b.norad ? a.norad - b.norad : 0) || (b.alt > 0) - (a.alt > 0) || rank[a.kind] - rank[b.kind] || (a.mag ?? 99) - (b.mag ?? 99) || a.name.localeCompare(b.name));
+  if (filter === 'overhead' && !q) items.sort((a, b) => b.alt - a.alt);
   items = items.slice(0, 150);
   $('list').innerHTML = items.map((o, i) => {
     const col = o.kind === 'planet' ? PLANET_COLORS[o.name] : o.kind === 'star' ? bvColor(o.bv) : KIND_COLOR[o.kind];
     return `<li data-i="${i}"><span class="dot" style="background:${col}"></span>
       <span class="nm"><b>${escapeHtml(o.kind === 'satellite' ? shortSat(o.name) : o.name)}</b><span class="muted small">${o.type}${o.mag != null && Number.isFinite(o.mag) ? ` · mag ${o.mag.toFixed(1)}` : ''}</span></span>
-      <span class="pos"><span class="${o.alt > 0 ? 'up' : 'down'}">${o.alt > 0 ? '▲' : '▼'} ${o.alt.toFixed(0)}°</span><br><span class="muted">${Math.round(o.az)}° ${cardinal(o.az)}</span></span></li>`;
+      <span class="pos"><span class="${o.alt > 0 ? 'up' : 'down'}">${o.alt > 0 ? '▲' : '▼'} ${o.alt.toFixed(o.kind === 'satellite' ? 1 : 0)}°</span><br><span class="muted">${o.kind === 'satellite' && o.alt > 0 ? `${Math.round(o.range).toLocaleString()} km · ` : ''}${Math.round(o.az)}° ${cardinal(o.az)}</span></span></li>`;
   }).join('') || '<li class="muted">Nothing matches.</li>';
   $('list').onclick = (ev) => {
     const li = ev.target.closest('li[data-i]');
@@ -597,6 +640,8 @@ function bindUI() {
     $('search').classList.remove('hidden');
     renderList();
   };
+  // Live list: satellites move, so re-render once a second while the panel is open.
+  setInterval(() => { if (!$('search').classList.contains('hidden')) renderList(); }, 1000);
   $('sClose').onclick = () => $('search').classList.add('hidden');
   $('q').oninput = renderList;
   $('chips').onclick = (e) => {
@@ -639,7 +684,7 @@ function bindUI() {
         state.satGroups = state.satGroups.filter((x) => x !== g);
         sky.dropSatGroup(g);
         if (state.target?.group === g) selectTarget(null);
-        $('satStatus').textContent = `${sky.satellites.length} satellites loaded`;
+        satStatus();
       }
       save('satGroups', state.satGroups);
     };
@@ -654,7 +699,7 @@ function bindUI() {
     save('loc', { lat, lon, elev: 0, label: 'Manual' });
     toast('Location updated');
   };
-  $('locGps').onclick = () => { try { localStorage.removeItem('loc'); } catch { /* */ } state.locLabel = ''; startGps(); };
+  $('locGps').onclick = () => { try { localStorage.removeItem('loc'); } catch { /* */ } state.locLabel = ''; $('loc').textContent = 'getting GPS fix…'; startGps(); };
 
   // Drag / zoom / tap-to-select on the sky canvas.
   const pointers = new Map();
