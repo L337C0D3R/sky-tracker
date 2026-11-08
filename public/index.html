@@ -6,9 +6,20 @@
   <title>SkyTracker AR</title>
   <meta name="description" content="Point your phone at the sky to find planets, stars, satellites and asteroids in real time." />
   <meta name="theme-color" content="#04060d" />
+  <meta name="color-scheme" content="dark" />
+  <!-- iPhone / iPad home-screen app -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SkyTracker" />
+  <meta name="format-detection" content="telephone=no, date=no, address=no" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="icon" href="icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="icon.svg" />
+  <meta property="og:title" content="SkyTracker AR" />
+  <meta property="og:description" content="Point your phone at the sky to find planets, stars, satellites and asteroids in real time." />
+  <meta property="og:image" content="icon-512.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -96,6 +107,8 @@
         <button data-p="max"><b>Max boost</b><span>Faintest; hold steady</span></button>
       </div>
       <div id="camNow" class="cam-now"></div>
+      <h3 id="lensHead" class="hidden">Lens</h3>
+      <div id="lensBox" class="presets"></div>
       <div id="camErr" class="small" style="color: var(--warn)"></div>
       <h3>Camera hardware</h3>
       <div id="camHw"></div>
@@ -114,7 +127,9 @@
       <button id="dClose" class="icon" aria-label="Close">✕</button>
     </div>
     <div id="dBody" class="d-body"></div>
-    <div class="d-foot"><button id="dGuide" class="primary">Guide me to it</button></div>
+    <div class="d-foot"><button id="dShare" class="share-btn" aria-label="Share">
+      <svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg></button>
+      <button id="dGuide" class="primary">Guide me to it</button></div>
   </section>
 
   <!-- Search panel -->
@@ -147,6 +162,7 @@
       <label class="tog"><span>Constellation lines</span><input type="checkbox" data-layer="constellations" /></label>
       <label class="tog"><span>Star names</span><input type="checkbox" data-layer="starLabels" /></label>
       <label class="tog"><span>Alt/az grid</span><input type="checkbox" data-layer="grid" /></label>
+      <label class="tog"><span>Red night vision <em>keeps your eyes dark-adapted</em></span><input type="checkbox" data-layer="red" /></label>
       <h3>Live satellites <span class="muted small">CelesTrak TLEs</span></h3>
       <label class="tog"><span>Space stations <em>ISS, Tiangong</em></span><input type="checkbox" data-sat="stations" /></label>
       <label class="tog"><span>Starlink <em>~10,000 satellites</em></span><input type="checkbox" data-sat="starlink" /></label>
@@ -187,6 +203,12 @@
     </div>
   </section>
 
+  <div id="iosHint" class="hidden">
+    <img src="apple-touch-icon.png" alt="" />
+    <div>Install SkyTracker: tap <svg viewBox="0 0 24 24" aria-label="Share"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg> <b>Share</b>, then <b>Add to Home Screen</b> for full-screen use.</div>
+    <button id="iosHintClose" class="icon" aria-label="Dismiss">✕</button>
+  </div>
+  <div id="redMode" aria-hidden="true"></div>
   <div id="toast" class="hidden"></div>
   <script type="module" src="js/main.js"></script>
 </body>

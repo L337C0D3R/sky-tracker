@@ -40,7 +40,10 @@ export class Orientation {
         DOE.requestPermission().catch(() => 'denied'),
         new Promise((r) => setTimeout(() => r('timeout'), 6000)),
       ]);
-      if (p === 'denied' && !this.raw) throw new Error('Motion & orientation permission denied – drag to look around.');
+      if (p === 'denied' && !this.raw) {
+        this.denied = true;
+        throw new Error('Motion & orientation access was denied. To allow it, close this tab, reopen the site and tap Allow. Until then, drag to look around.');
+      }
     }
   }
 
@@ -59,6 +62,8 @@ export class Orientation {
       else if (reliable) this.iosOffset = wrap360(this.iosOffset + wrap180(cand - this.iosOffset) * 0.05);
       alpha = e.alpha + this.iosOffset;
       this.absolute = true;
+      // iOS reports the compass uncertainty in degrees (−1 = needs calibration).
+      if (typeof e.webkitCompassAccuracy === 'number') this.accuracy = e.webkitCompassAccuracy;
     } else if (absEvt || e.absolute) {
       this.absolute = true;
     } else if (this.absolute) {

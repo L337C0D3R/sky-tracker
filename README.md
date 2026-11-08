@@ -8,6 +8,14 @@ Point your phone at the sky and get guided to planets, stars, satellites and ast
 - **AR camera mode**: the back camera with sky labels on top, driven by the phone's compass, gyro and accelerometer. Pick a target and arrows tell you which way to turn and tilt. The phone vibrates when the target is centred.
 - **Night camera**: Auto, Night sky and Max boost presets. Where the browser allows it (Android Chrome), you also get shutter speed, ISO, exposure compensation, frame rate, focus locked at infinity and white balance. A software boost (gain, contrast and frame stacking for noise reduction) works on every phone, including iPhone.
 - **Details for anything you tap**: live position and distance; for satellites, owner, launch date and site, orbit and the next passes with visibility; for planets, rise/transit/set, constellation, apparent size and moon phases; for stars, spectral type, temperature and luminosity. Wikipedia summaries are included where available.
+- **Built for iPhone too**:
+  - correct compass handling (`webkitCompassHeading`, with an accuracy readout and a calibration hint) and the iOS motion-permission flow
+  - the plain 1× lens instead of Safari's lens-switching Triple/Dual camera, plus a lens picker (Ultra Wide / Wide / Telephoto) with per-lens field of view
+  - automatic camera and screen wake-lock recovery after switching apps
+  - haptic feedback on target lock (iOS 18)
+  - home-screen app support (icons, full screen, safe areas, install hint)
+  - the iOS share sheet with deep links (`?t=25544`), and "Add to Calendar" for satellite passes with a 10-minute alert
+  - red night-vision mode
 - **Sky map mode** for desktop or phones without motion sensors: drag, pinch or scroll to look around.
 - **Planets, Sun, Moon and Pluto** from [Astronomy Engine](https://github.com/cosinekitty/astronomy) (VSOP87/ELP, about ±1″), with rise and set times.
 - **Asteroids** (Ceres, Vesta, Pallas, Apophis, Bennu, Eros…) propagated from *today's* osculating elements from NASA/JPL Horizons, with light-time and parallax corrections. Checked against Horizons to within about 0.005°.

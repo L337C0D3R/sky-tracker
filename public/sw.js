@@ -1,10 +1,10 @@
 // Offline shell: cache static assets; network-first for live data (/api/*).
-const CACHE = 'skytracker-v6';
+const CACHE = 'skytracker-v7';
 const ASSETS = [
   './', 'index.html', 'css/app.css', 'js/main.js', 'js/sky.js', 'js/orient.js', 'js/details.js', 'js/camctl.js',
   'vendor/astronomy.js', 'vendor/satellite.js',
   'data/stars.json', 'data/constellations.json', 'data/asteroids.json',
-  'icon.svg', 'manifest.webmanifest',
+  'icon.svg', 'icon-192.png', 'apple-touch-icon.png', 'manifest.webmanifest',
 ];
 
 self.addEventListener('install', (e) => {

@@ -7,7 +7,10 @@ import { load, save } from './orient.js';
 const $ = (id) => document.getElementById(id);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-let video, fx, fctx, track = null, caps = {}, visible = false;
+let video, fx, fctx, track = null, stream = null, caps = {}, visible = false;
+let lenses = []; // back-facing cameras [{deviceId, label, name, kind}]
+let onLensChange = null;
+const fovMap = load('camFovMap', {});
 const zoom = { want: 1, applied: 1 };
 let busy = false, queued = false, lastReadout = 0, stackFresh = true;
 
@@ -244,7 +247,8 @@ function renderSwControls() {
   );
 }
 
-export function initCamControls(videoEl, fxCanvas, { onZoom } = {}) {
+export function initCamControls(videoEl, fxCanvas, { onZoom, onLens } = {}) {
+  onLensChange = onLens;
   video = videoEl;
   fx = fxCanvas;
   fctx = fx.getContext('2d', { alpha: false });
@@ -263,7 +267,7 @@ export function initCamControls(videoEl, fxCanvas, { onZoom } = {}) {
   applySoftware();
 }
 
-export async function cameraStarted(t) {
+async function cameraStarted(t) {
   track = t;
   caps = t.getCapabilities?.() || {};
   zoom.want = 1;
@@ -272,6 +276,96 @@ export async function cameraStarted(t) {
   syncUi();
   await applyHardware();
 }
+
+// ---------------- Stream & lenses ----------------
+const isVirtual = (l) => /dual|triple/i.test(l);
+function lensKind(label) {
+  if (/ultra/i.test(label)) return 'ultra';
+  if (/tele/i.test(label)) return 'tele';
+  return 'wide';
+}
+function lensName(l, i) {
+  if (/^back camera$/i.test(l.label)) return 'Wide 1×';
+  if (/ultra wide/i.test(l.label)) return 'Ultra Wide 0.5×';
+  if (/telephoto/i.test(l.label)) return 'Telephoto';
+  if (/dual wide/i.test(l.label)) return 'Dual Wide (auto)';
+  if (/triple/i.test(l.label)) return 'Triple (auto)';
+  if (/dual/i.test(l.label)) return 'Dual (auto)';
+  return l.label ? l.label.replace(/camera2 /i, 'Camera ').replace(/, facing back/i, '') : `Back camera ${i + 1}`;
+}
+// Typical horizontal field of view across the long side, per lens type.
+const DEFAULT_FOV = { wide: 64, ultra: 100, tele: 26 };
+
+export function fov() {
+  const key = track?.label || 'default';
+  return fovMap[key] ?? DEFAULT_FOV[lensKind(track?.label || '')] ?? 64;
+}
+export function setFov(v) {
+  fovMap[track?.label || 'default'] = v;
+  save('camFovMap', fovMap);
+}
+
+async function refreshLenses() {
+  try {
+    const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const back = all.filter((d) => /back|rear|environment|world/i.test(d.label));
+    let list = back.length ? back : all;
+    // Hide iPhone virtual multi-lens devices when the individual lenses are available.
+    if (list.some((d) => /^back camera$/i.test(d.label))) list = list.filter((d) => !isVirtual(d.label));
+    lenses = list.map((d, i) => ({ deviceId: d.deviceId, label: d.label, name: lensName(d, i), kind: lensKind(d.label) }));
+  } catch { lenses = []; }
+}
+
+// Opens (or re-opens) the camera. On iPhones, prefer the plain 1× "Back Camera":
+// the virtual Dual/Triple devices swap lenses on their own, which breaks the
+// overlay's field-of-view calibration.
+export async function open(deviceId = load('camDevice', null)) {
+  stop();
+  const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const constraints = deviceId ? { ...base, deviceId: { exact: deviceId } } : { ...base, facingMode: { ideal: 'environment' } };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+  } catch (e) {
+    if (deviceId) { save('camDevice', null); return open(null); }
+    throw e;
+  }
+  track = stream.getVideoTracks()[0];
+  await refreshLenses();
+  if (!deviceId && isVirtual(track.label)) {
+    const wide = lenses.find((l) => /^back camera$/i.test(l.label));
+    if (wide) return open(wide.deviceId);
+  }
+  renderLenses();
+  await cameraStarted(track);
+  onLensChange?.();
+  return { stream, track };
+}
+
+export function stop() {
+  stream?.getTracks().forEach((t) => t.stop());
+  stream = null;
+  track = null;
+}
+export function liveTrack() { return track && track.readyState === 'live' ? track : null; }
+
+function renderLenses() {
+  const box = $('lensBox');
+  if (!box) return;
+  if (lenses.length < 2) { box.innerHTML = ''; $('lensHead').classList.add('hidden'); return; }
+  $('lensHead').classList.remove('hidden');
+  const cur = track?.getSettings?.().deviceId;
+  box.innerHTML = lenses.map((l, i) => `<button data-i="${i}" class="${l.deviceId === cur || l.label === track?.label ? 'on' : ''}"><b>${l.name}</b><span>${l.kind === 'ultra' ? 'Widest view' : l.kind === 'tele' ? 'Zoomed, needs steady hands' : 'Best for most use'}</span></button>`).join('');
+  box.onclick = async (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    const l = lenses[+b.dataset.i];
+    save('camDevice', l.deviceId);
+    $('camErr').textContent = '';
+    try { await openFromUi(l.deviceId); } catch (err) { $('camErr').textContent = `Could not switch lens (${err.name}).`; }
+  };
+}
+let openFromUi = (id) => open(id);
+export function setOpenHandler(fn) { openFromUi = fn; }
 
 export function setCss(transform) { video.style.transform = transform; fx.style.transform = transform; }
 export function show(on) { visible = on; updateVisibility(); }

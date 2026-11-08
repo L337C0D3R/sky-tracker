@@ -30,7 +30,6 @@ const state = {
   target: null,
   layers: { constellations: true, starLabels: true, grid: false, satLabels: true, trails: true, ...load('layers', {}) },
   satGroups: load('satGroups.v2', DEFAULT_GROUPS),
-  camFov: load('camFov', 64), // degrees across the camera's long side
   zoom: 1,
   lastSlow: -1e9,
   located: false,
@@ -40,6 +39,54 @@ const state = {
 };
 const sat = { cursor: 0, building: [], near: [], vis: [] };
 const cam = { stream: null, track: null, error: null };
+
+// ---------------- Platform ----------------
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const STANDALONE = navigator.standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+document.documentElement.classList.toggle('ios', IS_IOS);
+document.documentElement.classList.toggle('standalone', STANDALONE);
+
+// Haptic tick. iPhone Safari has no Vibration API, but on iOS 18+ toggling a
+// native <input switch> produces a system haptic.
+function haptic(ms = 40) {
+  if (navigator.vibrate) { navigator.vibrate(ms); return; }
+  if (!IS_IOS) return;
+  try {
+    const label = document.createElement('label');
+    label.ariaHidden = 'true';
+    label.style.display = 'none';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('switch', '');
+    label.appendChild(input);
+    document.head.appendChild(label);
+    label.click();
+    label.remove();
+  } catch { /* no haptics */ }
+}
+
+// Canvas roundRect arrived in Safari 16; keep iOS 15 working.
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(typeof r === 'number' ? r : 0, w / 2, h / 2);
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+  };
+}
+
+// Stop Safari's page-level pinch/double-tap zoom; the sky has its own zoom.
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+
+function syncFovUi() {
+  const v = Math.round(camctl.fov());
+  $('fov').value = v;
+  $('fovVal').textContent = `${v}°`;
+}
 
 // ---------------- Helpers ----------------
 function toast(msg, ms = 3500) {
@@ -75,14 +122,20 @@ async function init() {
   addEventListener('resize', resize);
   splashStars();
   bindUI();
-  camctl.initCamControls(video, $('camfx'), { onZoom: () => cssZoom() });
+  camctl.initCamControls(video, $('camfx'), { onZoom: () => cssZoom(), onLens: () => { syncFovUi(); cssZoom(); } });
+  camctl.setOpenHandler((id) => attachStream(() => camctl.open(id)));
   await sky.loadStatic();
   const consNames = Object.fromEntries(sky.constellations.map((c) => [c.id, c.name]));
   initDetails({
     sky, displayName, colorOf, cardinal, fmtDist, lightTime,
     consName: (id) => consNames[id] || id,
     onGuide: (o) => selectTarget(o, true),
+    onShare: shareObject,
+    linkFor,
+    isIOS: IS_IOS,
   });
+  applyLayers();
+  openDeepLink();
   const saved = load('loc', null);
   if (saved) setLocation(saved.lat, saved.lon, saved.elev || 0, 'last GPS fix');
   else {
@@ -124,6 +177,10 @@ function startGps() {
       const prev = sky.observer;
       const acc = `GPS ±${accuracy < 1000 ? `${Math.round(accuracy)} m` : `${(accuracy / 1000).toFixed(1)} km`}`;
       $('locDot').classList.toggle('ok', accuracy < 100);
+      if (IS_IOS && accuracy > 1500 && !state.preciseHinted) {
+        state.preciseHinted = true;
+        toast('Your location is approximate. Turn on Precise Location: Settings › Privacy & Security › Location Services › Safari Websites.', 8000);
+      }
       const text = `${acc} · ${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
       // ~100 m moves matter for low satellites; ignore jitter below that.
       if (state.locLabel?.startsWith('GPS') && Math.abs(prev.latitude - lat) < 0.001 && Math.abs(prev.longitude - lon) < 0.001) {
@@ -165,22 +222,72 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && sky.tleLoadedAt && Date.now() - sky.tleLoadedAt > 2 * 3600 * 1000) refreshTles();
 });
 
+// ---------------- Sharing & deep links ----------------
+const CARD_LONG = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast', SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest', W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
+function linkFor(o) {
+  const key = o.kind === 'satellite' ? o.norad : o.name;
+  return `${location.origin}${location.pathname}?t=${encodeURIComponent(key)}`;
+}
+async function shareObject(o) {
+  const where = o.alt > 0 ? `${o.alt.toFixed(0)}° up in the ${CARD_LONG[cardinal(o.az)]}` : 'below the horizon';
+  const text = `${displayName(o)} is ${where} right now, ${fmtDist(o)} away. Find it live with SkyTracker AR:`;
+  const url = linkFor(o);
+  try {
+    if (navigator.share) { await navigator.share({ title: `${displayName(o)} · SkyTracker AR`, text, url }); return; }
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast('Link copied');
+  } catch (e) { if (e.name !== 'AbortError') toast('Could not share'); }
+}
+// ?t=25544 (NORAD) or ?t=Jupiter opens that object's details once it's loaded.
+function openDeepLink() {
+  const key = new URLSearchParams(location.search).get('t');
+  if (!key) return;
+  let tries = 0;
+  const attempt = () => {
+    const k = key.toLowerCase();
+    const o = /^\d+$/.test(key) ? sky.satellites.find((s) => s.norad === key)
+      : sky.objects.find((x) => x.name.toLowerCase() === k || displayName(x).toLowerCase() === k);
+    if (o && state.located) {
+      sky.updateSlow(new Date());
+      sky.updateFast(new Date(), sky.satellites.filter((s) => s === o));
+      selectTarget(o, true);
+      openDetails(o);
+    } else if (++tries < 30) setTimeout(attempt, 1000);
+  };
+  setTimeout(attempt, 300);
+}
+
+// ---------------- Layers ----------------
+function applyLayers() {
+  document.body.classList.toggle('red', !!state.layers.red);
+}
+
+// ---------------- iPhone hints ----------------
+function maybeShowInstallHint() {
+  if (!IS_IOS || STANDALONE || load('iosHintDone', false)) return;
+  setTimeout(() => {
+    if (state.mode && !$('splash').classList.contains('hidden')) return;
+    $('iosHint').classList.remove('hidden');
+  }, 8000);
+}
+
 // ---------------- Camera ----------------
-async function startCamera() {
+async function startCamera(force = false) {
   if (!window.isSecureContext) throw Object.assign(new Error('the camera needs an https:// address'), { name: 'Insecure' });
-  if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('this browser has no camera access (try Chrome or Safari)'), { name: 'Unsupported' });
-  if (cam.stream?.active) return;
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-    audio: false,
-  });
+  if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('this browser has no camera access (try Safari or Chrome)'), { name: 'Unsupported' });
+  if (!force && camctl.liveTrack()) return;
+  await attachStream(() => camctl.open());
+}
+
+// Shared by first start, lens switches and resume-after-background.
+async function attachStream(openFn) {
+  const { stream, track } = await openFn();
   cam.stream = stream;
+  cam.track = track;
+  cam.error = null;
   video.srcObject = stream;
   await video.play().catch(() => {});
-  cam.track = stream.getVideoTracks()[0];
-  cam.error = null;
-  camctl.cameraStarted(cam.track);
-  cam.track.addEventListener('ended', () => { cam.error = Object.assign(new Error('the camera stopped'), { name: 'Ended' }); cam.stream = null; });
+  track.addEventListener('ended', () => { cam.stream = null; });
   // Some browsers start the stream but never paint a frame until another play() call.
   setTimeout(async () => {
     if (state.mode !== 'ar' || video.videoWidth) return;
@@ -192,6 +299,25 @@ async function startCamera() {
       }
     }, 1500);
   }, 2500);
+}
+
+// iOS stops the camera, wake lock and sometimes sensors when you switch apps or lock the phone.
+async function resumeAfterBackground() {
+  if (document.hidden || state.mode !== 'ar') return;
+  const t = camctl.liveTrack();
+  if (!t || t.muted) {
+    try { await startCamera(true); } catch (e) { cam.error = e; showCamBanner(); }
+  } else if (video.paused) video.play().catch(() => {});
+  requestWakeLock();
+}
+document.addEventListener('visibilitychange', resumeAfterBackground);
+addEventListener('pageshow', resumeAfterBackground);
+
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if (navigator.wakeLock && !document.hidden && (!wakeLock || wakeLock.released)) wakeLock = await navigator.wakeLock.request('screen');
+  } catch { /* not allowed right now */ }
 }
 
 function cameraErrorText(e) {
@@ -220,7 +346,7 @@ async function startAR(fromTap = true) {
   enter('ar');
   const err = await sensors;
   if (err instanceof Error && fromTap) toast(err.message);
-  try { await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
+  requestWakeLock();
   setTimeout(() => {
     if (state.mode !== 'ar') return;
     if (!orient.hasSensor) {
@@ -258,11 +384,11 @@ function enter(mode) {
     ? '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'
     : '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13.5" r="3.5"/><path d="M8 7l2-3h4l2 3"/>';
   setZoom(1);
-  $('fov').value = state.camFov;
-  $('fovVal').textContent = `${state.camFov}°`;
+  syncFovUi();
   $('yaw').value = orient.yawOffset;
   $('yawVal').textContent = `${orient.yawOffset.toFixed(1)}°`;
   if (state.target) selectTarget(state.target, false);
+  maybeShowInstallHint();
 }
 
 // ---------------- Zoom ----------------
@@ -302,7 +428,7 @@ function focal() {
   const { W, H } = state;
   if (state.mode === 'ar') {
     const vw = video.videoWidth || Math.max(W, H), vh = video.videoHeight || Math.min(W, H);
-    const fv = (Math.max(vw, vh) / 2) / Math.tan((state.camFov / 2) * D2R);
+    const fv = (Math.max(vw, vh) / 2) / Math.tan((camctl.fov() / 2) * D2R);
     return fv * Math.max(W / vw, H / vh) * state.zoom;
   }
   const fov = clamp(70 / state.zoom, 1, 120);
@@ -773,7 +899,14 @@ let lastLive = 0;
 function hud(date, now) {
   const pt = orient.pointing();
   $('heading').textContent = `${Math.round(pt.az)}° ${cardinal(pt.az)}`;
-  const src = state.mode === 'ar' ? (orient.mode === 'sensor' ? (orient.absolute ? 'compass' : 'gyro only') : 'drag to look') : 'sky map';
+  const acc = orient.accuracy;
+  const src = state.mode === 'ar'
+    ? (orient.mode === 'sensor' ? (orient.absolute ? `compass${acc > 0 ? ` ±${Math.round(acc)}°` : ''}` : 'gyro only') : 'drag to look')
+    : 'sky map';
+  if (state.mode === 'ar' && orient.mode === 'sensor' && acc != null && (acc < 0 || acc > 25) && !state.calHinted) {
+    state.calHinted = true;
+    toast(`Compass accuracy is poor${acc > 0 ? ` (±${Math.round(acc)}°)` : ''}. Move your phone in a figure-8, away from metal and magnets, or tap Align on a bright object.`, 7000);
+  }
   $('sub').textContent = `Alt ${pt.alt.toFixed(0)}° · ${src}${orient.yawOffset ? ` · cal ${orient.yawOffset > 0 ? '+' : ''}${orient.yawOffset.toFixed(1)}°` : ''}`;
   $('clock').textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   drawTape(pt.az);
@@ -796,7 +929,7 @@ function hud(date, now) {
   const ret = $('reticle');
   if (c && c !== state.target) {
     const extra = c.kind === 'satellite' ? `${fmtDist(c)} from you · ${Math.round(c.height)} km up`
-      : `${c.kind === 'star' ? 'Star' : c.type} · ${fmtDist(c, true)} from you`;
+      : `${c.kind === 'star' ? 'Star' : c.type}${fmtDist(c, true) !== '—' ? ` · ${fmtDist(c, true)} from you` : ''}`;
     ret.innerHTML = `<b>${escapeHtml(displayName(c))}</b> · <span class="muted">${escapeHtml(extra)}</span>`;
     ret.classList.remove('hidden');
   } else ret.classList.add('hidden');
@@ -806,7 +939,7 @@ function hud(date, now) {
   const dAz = wrap180(t.az - pt.az), dAlt = t.alt - pt.alt;
   const sep = Math.acos(clamp(dot(t.e, B.fwd), -1, 1)) / D2R;
   const locked = sep < Math.max(0.6, 2.5 / Math.sqrt(state.zoom));
-  if (locked && !state.locked && navigator.vibrate) navigator.vibrate(60);
+  if (locked && !state.locked) haptic();
   state.locked = locked;
   const g = $('tGuide');
   g.classList.toggle('locked', locked);
@@ -989,6 +1122,7 @@ function bindUI() {
     else await startAR(true);
   };
   $('camRetry').onclick = () => startAR(true);
+  $('iosHintClose').onclick = () => { $('iosHint').classList.add('hidden'); save('iosHintDone', true); };
   $('btnSensors').onclick = async () => {
     $('btnSensors').classList.add('hidden');
     try { await orient.start(); } catch (e) { toast(e.message); }
@@ -999,7 +1133,7 @@ function bindUI() {
 
   for (const cb of document.querySelectorAll('[data-layer]')) {
     cb.checked = !!state.layers[cb.dataset.layer];
-    cb.onchange = () => { state.layers[cb.dataset.layer] = cb.checked; save('layers', state.layers); };
+    cb.onchange = () => { state.layers[cb.dataset.layer] = cb.checked; save('layers', state.layers); applyLayers(); };
   }
   for (const cb of document.querySelectorAll('[data-sat]')) {
     const g = cb.dataset.sat;
@@ -1021,7 +1155,7 @@ function bindUI() {
       save('satGroups.v2', state.satGroups);
     };
   }
-  $('fov').oninput = (e) => { state.camFov = +e.target.value; $('fovVal').textContent = `${state.camFov}°`; save('camFov', state.camFov); };
+  $('fov').oninput = (e) => { camctl.setFov(+e.target.value); $('fovVal').textContent = `${e.target.value}°`; };
   $('yaw').oninput = (e) => { orient.yawOffset = +e.target.value; $('yawVal').textContent = `${orient.yawOffset.toFixed(1)}°`; save('yawOffset', orient.yawOffset); };
   $('calReset').onclick = () => { orient.resetCalibration(); $('yaw').value = 0; $('yawVal').textContent = '0.0°'; toast('Calibration reset'); };
   $('locSet').onclick = () => {

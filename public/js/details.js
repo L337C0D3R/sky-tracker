@@ -116,6 +116,39 @@ function spectralWords(sp) {
   return color ? `${color} ${lum}` : null;
 }
 
+// ---------------- Calendar (.ics) ----------------
+const icsDate = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+const icsText = (t) => String(t).replace(/\\/g, '\\\\').replace(/[,;]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
+function passIcs(sat, p, name, obs, url) {
+  const dir = deps.cardinal;
+  const desc = `Rises in the ${dir(p.startAz)}, highest ${p.maxEl.toFixed(0)}° in the ${dir(p.peakAz)} at ${p.peakT.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, sets in the ${dir(p.endAz)}. `
+    + (p.visible ? 'Sunlit against a dark sky: look for a steady moving point of light.' : 'Not visible to the eye on this pass (Earth’s shadow or daylight).')
+    + ` Track it live: ${url}`;
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//SkyTracker AR//EN', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
+    `UID:${sat.norad}-${icsDate(p.start)}@skytracker`, `DTSTAMP:${icsDate(new Date())}`,
+    `DTSTART:${icsDate(p.start)}`, `DTEND:${icsDate(p.end)}`,
+    `SUMMARY:${icsText(`${name} pass · max ${p.maxEl.toFixed(0)}°${p.visible ? ' (visible)' : ''}`)}`,
+    `DESCRIPTION:${icsText(desc)}`, `GEO:${obs.latitude.toFixed(4)};${obs.longitude.toFixed(4)}`, `URL:${url}`,
+    'BEGIN:VALARM', 'TRIGGER:-PT10M', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(`${name} rises in 10 minutes`)}`, 'END:VALARM',
+    'END:VEVENT', 'END:VCALENDAR', '',
+  ].join('\r\n');
+}
+function openIcs(ics, filename) {
+  const a = document.createElement('a');
+  if (deps.isIOS) {
+    // Safari opens text/calendar data in the native "Add to Calendar" sheet.
+    a.href = `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`;
+  } else {
+    a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+    a.download = filename;
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // ---------------- Rendering ----------------
 let deps;
 let current = null;
@@ -125,6 +158,7 @@ export function initDetails(d) {
   deps = d;
   $('dClose').onclick = closeDetails;
   $('dGuide').onclick = () => { const o = current; closeDetails(); deps.onGuide?.(o); };
+  $('dShare').onclick = () => current && deps.onShare?.(current);
 }
 
 export function isOpen() { return !$('details').classList.contains('hidden'); }
@@ -230,8 +264,16 @@ export function openDetails(o) {
           <div><b>${p.ongoing ? 'Now' : dt(p.start)}</b><span>${Math.round((p.end - p.start) / 60000)} min · ${cardinal(p.startAz)} → ${cardinal(p.endAz)}</span></div>
           <div class="pk"><b>${p.maxEl.toFixed(0)}°</b><span>max, ${cardinal(p.peakAz)} at ${t2(p.peakT)}</span></div>
           <em>${p.visible ? 'Visible' : !p.sunlit ? 'In shadow' : 'Daylight'}</em>
+          ${p.ongoing ? '' : `<button class="cal" data-k="${ps.indexOf(p)}">Add to Calendar</button>`}
         </li>`).join('')}</ul><p class="d-src">Passes above 10°. “Visible” = sunlit while your sky is dark.</p>`
         : '<p class="muted">No passes above 10° in the next 3 days from your location.</p>';
+      $('dPasses').onclick = (e) => {
+        const b = e.target.closest('button.cal');
+        if (!b) return;
+        const p = ps[+b.dataset.k];
+        const name = deps.displayName(o);
+        openIcs(passIcs(o, p, name, sky.observer, deps.linkFor(o)), `${name.replace(/[^\w]+/g, '-')}-pass.ics`);
+      };
     }, 30);
     satcat(o.norad).then((c) => {
       if (my !== token || !c) return;

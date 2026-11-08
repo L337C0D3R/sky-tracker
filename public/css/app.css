@@ -15,7 +15,12 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
-  font: 15px/1.4 var(--font); overscroll-behavior: none; -webkit-font-smoothing: antialiased; }
+  font: 15px/1.4 var(--font); overscroll-behavior: none; -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* App-like touch behaviour (no text selection, long-press callouts or double-tap zoom). */
+body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+input, .wiki p { -webkit-user-select: text; user-select: text; }
+img { -webkit-user-drag: none; }
 button { font: inherit; color: inherit; cursor: pointer; }
 input { font: inherit; color: var(--text); }
 .hidden { display: none !important; }
@@ -30,18 +35,19 @@ input { font: inherit; color: var(--text); }
 #sky { touch-action: none; }
 
 /* ---------- HUD ---------- */
-#hud { position: fixed; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top) + 10px) 16px 26px;
+#hud { position: fixed; top: 0; left: 0; right: 0;
+  padding: calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 16px) 26px calc(env(safe-area-inset-left) + 16px);
   pointer-events: none; background: linear-gradient(rgba(2,4,10,.72), rgba(2,4,10,.28) 70%, rgba(2,4,10,0));
   display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 #hud button { pointer-events: auto; }
 .hud-row { display: flex; justify-content: space-between; align-items: flex-start; }
 .mono-big { font: 700 26px/1 var(--display); letter-spacing: .3px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 8px rgba(0,0,0,.6); }
-.hud-sub { margin-top: 4px; font-size: 12.5px; color: #c9d2ea; text-shadow: 0 1px 3px #000; }
+.hud-sub { margin-top: 4px; white-space: nowrap; font-size: 12.5px; color: #c9d2ea; text-shadow: 0 1px 3px #000; }
 .hud-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .hud-clock { font: 600 15px var(--display); font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px #000; }
 .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--glass);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); padding: 4px 10px; border-radius: 99px;
-  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 62vw; overflow: hidden; text-overflow: ellipsis; }
+  font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 52vw; overflow: hidden; text-overflow: ellipsis; }
 .dot-status { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
 .dot-status.ok { background: var(--good); box-shadow: 0 0 8px var(--good); }
 #tape { display: block; width: min(560px, 100%); height: 34px; margin: 2px auto 0; }
@@ -60,7 +66,7 @@ input { font: inherit; color: var(--text); }
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); white-space: nowrap; text-align: center; }
 #reticle b { font-weight: 650; }
 
-#zoomCtl { position: fixed; right: 12px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column;
+#zoomCtl { position: fixed; right: calc(env(safe-area-inset-right) + 12px); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column;
   border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--glass);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 #zoomCtl button { width: 46px; height: 46px; border: 0; background: transparent; font: 600 22px var(--display); }
@@ -111,7 +117,7 @@ button.ghost { border: 1px solid var(--line); background: rgba(255,255,255,.05);
 @keyframes blink { 50% { opacity: .5; } }
 
 /* ---------- Sheets ---------- */
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 80dvh; display: flex; flex-direction: column;
+.sheet { position: fixed; z-index: 4; left: 0; right: 0; bottom: 0; max-height: 80dvh; overscroll-behavior: contain; display: flex; flex-direction: column;
   background: rgba(8, 11, 22, .97); border-top: 1px solid var(--line); border-radius: 24px 24px 0 0;
   padding: 6px 16px calc(env(safe-area-inset-bottom) + 12px); max-width: 640px; margin: 0 auto;
   box-shadow: 0 -10px 40px rgba(0,0,0,.5); animation: rise .22s ease-out; }
@@ -148,10 +154,11 @@ button.ghost { border: 1px solid var(--line); background: rgba(255,255,255,.05);
 .about { margin-top: 18px; line-height: 1.5; }
 
 /* ---------- Splash ---------- */
-#splash { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; z-index: 5;
+#splash { position: fixed; inset: 0; display: flex; overflow-y: auto; -webkit-overflow-scrolling: touch; z-index: 5;
+  padding: calc(env(safe-area-inset-top) + 20px) calc(env(safe-area-inset-right) + 24px) calc(env(safe-area-inset-bottom) + 20px) calc(env(safe-area-inset-left) + 24px);
   background: radial-gradient(ellipse at 50% 18%, #1a2a66 0%, #0a1030 38%, #04060d 75%); }
 #stars { position: absolute; inset: 0; width: 100%; height: 100%; }
-.splash-inner { position: relative; max-width: 380px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.splash-inner { position: relative; margin: auto; max-width: 380px; text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
 .splash-inner h1 { margin: 0; font: 700 36px/1 var(--display); letter-spacing: -.5px; }
 .splash-inner h1 span { font-size: 15px; margin-left: 8px; padding: 3px 8px; border-radius: 8px; background: var(--accent-2); color: #04211a; vertical-align: 8px; letter-spacing: .5px; }
 .lead { margin: 0; color: #c8d2ee; font-size: 16px; }
@@ -204,7 +211,7 @@ button.link { border: 0; background: none; color: #b8c4ea; text-decoration: unde
 @media (min-width: 520px) { .d-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* ---------- Night camera ---------- */
-#camBtn { position: fixed; right: 12px; top: calc(50% - 128px); width: 48px; height: 58px; display: flex; flex-direction: column;
+#camBtn { position: fixed; right: calc(env(safe-area-inset-right) + 12px); top: calc(50% - 128px); width: 48px; height: 58px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2px; border: 1px solid var(--line); border-radius: 16px; background: var(--glass);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 10.5px; font-weight: 600; }
 #camBtn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
@@ -217,3 +224,29 @@ button.link { border: 0; background: none; color: #b8c4ea; text-decoration: unde
 .presets button.on { border-color: var(--accent); background: rgba(109,141,255,.2); }
 .cam-now { margin-top: 10px; font-size: 12.5px; color: var(--accent-2); font-variant-numeric: tabular-nums; }
 #camHw label.range span, #camSwBox label.range span { min-width: 108px; }
+
+/* ---------- iPhone extras ---------- */
+#iosHint { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 156px); z-index: 3;
+  width: min(420px, calc(100vw - 24px)); display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px;
+  border-radius: 18px; background: var(--glass-strong); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 13.5px; }
+#iosHint img { width: 40px; height: 40px; border-radius: 10px; flex: none; }
+#iosHint svg { width: 16px; height: 16px; vertical-align: -3px; fill: none; stroke: #9fb4ff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.d-foot { display: flex; gap: 10px; }
+.share-btn { flex: none; width: 52px; border: 1px solid var(--line); background: rgba(255,255,255,.06); border-radius: 16px; display: grid; place-items: center; }
+.share-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.passes li .cal { grid-column: 1 / -1; justify-self: start; margin-top: 4px; border: 1px solid var(--line); background: rgba(255,255,255,.06);
+  border-radius: 9px; padding: 5px 10px; font-size: 12px; font-weight: 600; }
+.passes li.vis .cal { border-color: rgba(68,227,160,.5); color: #b6f5d9; }
+/* Red night vision: multiply everything by pure red so only red light reaches your eyes. */
+#redMode { display: none; position: fixed; inset: 0; background: #ff0000; mix-blend-mode: multiply; pointer-events: none; z-index: 100; }
+body.red #redMode { display: block; }
+body.red { --accent: #b3261e; --accent-2: #ff5a4d; --good: #ff6b5e; }
+
+/* Phones in landscape: compact start screen. */
+@media (max-height: 520px) {
+  .logo { width: 56px; height: 56px; }
+  .splash-inner { gap: 8px; max-width: 520px; }
+  .splash-inner h1 { font-size: 28px; }
+  .feats { display: none; }
+  #stars { position: fixed; }
+}
