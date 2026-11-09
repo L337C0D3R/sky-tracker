@@ -134,6 +134,18 @@ function passIcs(sat, p, name, obs, url) {
     'END:VEVENT', 'END:VCALENDAR', '',
   ].join('\r\n');
 }
+// Android: Google Calendar's add-event screen (opens the Calendar app when installed).
+function openGoogleCalendar(sat, p, name, url) {
+  const dir = deps.cardinal;
+  const q = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: `${name} pass · max ${p.maxEl.toFixed(0)}°${p.visible ? ' (visible)' : ''}`,
+    dates: `${icsDate(p.start)}/${icsDate(p.end)}`,
+    details: `Rises in the ${dir(p.startAz)}, highest ${p.maxEl.toFixed(0)}° in the ${dir(p.peakAz)} at ${p.peakT.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, sets in the ${dir(p.endAz)}. ${p.visible ? 'Sunlit against a dark sky: look for a steady moving point of light.' : 'Not visible to the eye on this pass.'}\nTrack it live: ${url}`,
+  });
+  window.open(`https://calendar.google.com/calendar/render?${q}`, '_blank', 'noopener');
+}
+
 function openIcs(ics, filename) {
   const a = document.createElement('a');
   if (deps.isIOS) {
@@ -279,7 +291,8 @@ export function openDetails(o) {
         if (!b) return;
         const p = ps[+b.dataset.k];
         const name = deps.displayName(o);
-        openIcs(passIcs(o, p, name, sky.observer, deps.linkFor(o)), `${name.replace(/[^\w]+/g, '-')}-pass.ics`);
+        if (deps.isAndroid) openGoogleCalendar(o, p, name, deps.linkFor(o));
+        else openIcs(passIcs(o, p, name, sky.observer, deps.linkFor(o)), `${name.replace(/[^\w]+/g, '-')}-pass.ics`);
       };
     };
     live.renderPasses = renderPasses;

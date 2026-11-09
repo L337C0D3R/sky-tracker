@@ -301,3 +301,11 @@ body.has-target #nearPanel { display: none; }
 #nearList li { padding: 4px 6px; gap: 8px; }
 #nearList .dist, #nearList .dist span, #nearList .nm span { white-space: nowrap; }
 @media (min-width: 420px) { #nearHead .muted { display: inline; } }
+
+/* ---------- Android install prompt ---------- */
+#installHint { position: fixed; left: calc(env(safe-area-inset-left) + 12px); top: calc(env(safe-area-inset-top) + 156px); z-index: 3;
+  width: min(400px, calc(100vw - 90px)); display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 12px;
+  border-radius: 18px; background: var(--glass-strong); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 13px; }
+#installHint img { width: 38px; height: 38px; border-radius: 10px; flex: none; }
+#installHint > div { flex: 1; line-height: 1.35; }
+#installBtn { flex: none; border: 0; background: var(--accent); color: #fff; font-weight: 650; padding: 8px 12px; border-radius: 10px; }

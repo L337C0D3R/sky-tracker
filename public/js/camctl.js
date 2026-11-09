@@ -356,7 +356,19 @@ function lensKind(label) {
   if (/tele/i.test(label)) return 'tele';
   return 'wide';
 }
-function lensName(l, i) {
+// Android (Chrome) labels cameras "camera2 0, facing back", "camera2 2, facing back"…
+// The lowest-numbered back camera is the phone's main lens.
+const androidIndex = (label) => { const m = /camera\s?2?\s*(\d+),\s*facing back/i.exec(label || ''); return m ? +m[1] : null; };
+function androidMain(list) {
+  const backs = list.filter((l) => androidIndex(l.label) != null);
+  return backs.length ? backs.reduce((a, b) => (androidIndex(a.label) <= androidIndex(b.label) ? a : b)) : null;
+}
+function lensName(l, i, list = []) {
+  const ai = androidIndex(l.label);
+  if (ai != null) {
+    const main = androidMain(list);
+    return main && main.deviceId === l.deviceId ? 'Main camera' : `Other lens ${ai}`;
+  }
   if (/^back camera$/i.test(l.label)) return 'Wide 1×';
   if (/ultra wide/i.test(l.label)) return 'Ultra Wide 0.5×';
   if (/telephoto/i.test(l.label)) return 'Telephoto';
@@ -384,7 +396,7 @@ async function refreshLenses() {
     let list = back.length ? back : all;
     // Hide iPhone virtual multi-lens devices when the individual lenses are available.
     if (list.some((d) => /^back camera$/i.test(d.label))) list = list.filter((d) => !isVirtual(d.label));
-    lenses = list.map((d, i) => ({ deviceId: d.deviceId, label: d.label, name: lensName(d, i), kind: lensKind(d.label) }));
+    lenses = list.map((d, i) => ({ deviceId: d.deviceId, label: d.label, name: lensName(d, i, list), kind: lensKind(d.label) }));
   } catch { lenses = []; }
 }
 
@@ -406,6 +418,12 @@ export async function open(deviceId = load('camDevice', null)) {
   if (!deviceId && isVirtual(track.label)) {
     const wide = lenses.find((l) => /^back camera$/i.test(l.label));
     if (wide) return open(wide.deviceId);
+  }
+  // Android: Chrome's "environment" camera is sometimes the ultra-wide or telephoto lens.
+  // Use the main lens so the overlay's field of view is right.
+  if (!deviceId && androidIndex(track.label) != null) {
+    const main = androidMain(lenses);
+    if (main && main.label !== track.label) return open(main.deviceId);
   }
   renderLenses();
   await cameraStarted(track);

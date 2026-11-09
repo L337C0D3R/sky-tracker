@@ -43,8 +43,19 @@ const cam = { stream: null, track: null, error: null };
 
 // ---------------- Platform ----------------
 const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const STANDALONE = navigator.standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
 document.documentElement.classList.toggle('ios', IS_IOS);
+document.documentElement.classList.toggle('android', IS_ANDROID);
+
+// Android / desktop Chrome: real "Install app" prompt.
+let installPrompt = null;
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  if (!STANDALONE && !load('installDone', false)) setTimeout(() => { if (installPrompt && document.body.classList.contains('app-on')) $('installHint').classList.remove('hidden'); }, 6000);
+});
+addEventListener('appinstalled', () => { installPrompt = null; $('installHint').classList.add('hidden'); save('installDone', true); });
 document.documentElement.classList.toggle('standalone', STANDALONE);
 
 // Haptic tick. iPhone Safari has no Vibration API, but on iOS 18+ toggling a
@@ -77,6 +88,13 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
     this.arcTo(x, y, x + w, y, r);
     this.closePath();
   };
+}
+
+// Android: hide the browser bars for an immersive camera view. Browsers only allow this
+// from a tap, so it's tried on "Open camera" and again on the first tap on the camera view.
+function goFullscreen() {
+  if (!IS_ANDROID || STANDALONE || document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+  document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
 }
 
 // Stop Safari's page-level pinch/double-tap zoom; the sky has its own zoom.
@@ -149,6 +167,7 @@ async function init() {
     onShare: shareObject,
     linkFor,
     isIOS: IS_IOS,
+    isAndroid: IS_ANDROID,
   });
   applyLayers();
   openDeepLink();
@@ -195,9 +214,11 @@ function startGps() {
       const prev = sky.observer;
       const acc = `GPS ±${accuracy < 1000 ? `${Math.round(accuracy)} m` : `${(accuracy / 1000).toFixed(1)} km`}`;
       $('locDot').classList.toggle('ok', accuracy < 100);
-      if (IS_IOS && accuracy > 1500 && !state.preciseHinted) {
+      if ((IS_IOS || IS_ANDROID) && accuracy > 1500 && !state.preciseHinted) {
         state.preciseHinted = true;
-        toast('Your location is approximate. Turn on Precise Location: Settings › Privacy & Security › Location Services › Safari Websites.', 8000);
+        toast(IS_IOS
+          ? 'Your location is approximate. Turn on Precise Location: Settings › Privacy & Security › Location Services › Safari Websites.'
+          : 'Your location is approximate. Turn on “Use precise location” for this browser: Settings › Location › App location permissions.', 8000);
       }
       const text = `${acc} · ${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
       // ~100 m moves matter for low satellites; ignore jitter below that.
@@ -352,6 +373,7 @@ function cameraErrorText(e) {
 
 async function startAR(fromTap = true) {
   $('splashMsg').textContent = 'Starting camera…';
+  if (fromTap) goFullscreen();
   // Must run first, synchronously inside the tap, for iOS to show its prompt.
   const sensors = orient.start().catch((e) => e);
   try {
@@ -486,12 +508,22 @@ function frame(now) {
 
 // Whole catalogue is swept in slices (~3×/s) to find who is near/above the horizon;
 // those inside the view are re-propagated every frame so they move smoothly.
+// Adaptive quality: slower phones sweep the catalogue over more frames.
+const perf = { avg: 16, last: 0, slow: false };
+function trackFrameTime(now) {
+  if (perf.last) perf.avg += (Math.min(100, now - perf.last) - perf.avg) * 0.05;
+  perf.last = now;
+  const slow = perf.avg > 24;
+  if (slow !== perf.slow) { perf.slow = slow; document.documentElement.classList.toggle('slow', slow); }
+}
+
 function updateSatellites(date, now) {
+  trackFrameTime(now);
   const all = sky.satellites;
   const n = all.length;
   if (!n) { sat.near = []; sat.vis = []; return; }
   if (sat.cursor >= n) sat.cursor = 0;
-  const per = Math.max(60, Math.ceil(n / 20));
+  const per = Math.max(60, Math.ceil(n / (perf.slow ? 45 : 20)));
   const end = Math.min(n, sat.cursor + per);
   const slice = all.slice(sat.cursor, end);
   sky.updateFast(date, slice);
@@ -1360,6 +1392,15 @@ function bindUI() {
   $('darkBoost').onclick = () => { $('darkHint').classList.add('hidden'); camctl.applyPreset('night'); toast('Night camera on. Rest the phone on something steady for the best picture.'); };
   $('darkClose').onclick = () => $('darkHint').classList.add('hidden');
   $('iosHintClose').onclick = () => { $('iosHint').classList.add('hidden'); save('iosHintDone', true); };
+  $('installBtn').onclick = async () => {
+    $('installHint').classList.add('hidden');
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const r = await installPrompt.userChoice.catch(() => null);
+    if (r?.outcome === 'accepted') save('installDone', true);
+    installPrompt = null;
+  };
+  $('installClose').onclick = () => { $('installHint').classList.add('hidden'); save('installDone', true); };
   $('btnSensors').onclick = async () => {
     $('btnSensors').classList.add('hidden');
     try { await orient.start(); } catch (e) { toast(e.message); }
@@ -1410,6 +1451,7 @@ function bindUI() {
   let dragStart = null, pinch0 = null, moved = false;
   canvas.addEventListener('pointerdown', (e) => {
     if (state.mode === 'ar' && video.paused && cam.stream) video.play().catch(() => {});
+    if (state.mode === 'ar' && !state.fsTried) { state.fsTried = true; goFullscreen(); }
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
     moved = pointers.size > 1;
