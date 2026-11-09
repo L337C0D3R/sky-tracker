@@ -189,6 +189,7 @@ function section(title, html, id = '') {
   return `<section class="d-sec"${id ? ` id="${id}"` : ''}><h3>${esc(title)}</h3>${html}</section>`;
 }
 const t2 = (d) => (d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—');
+const t3 = (d) => (d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—');
 const dt = (d) => (d ? d.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 const dayDt = (d) => (d ? d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
 
@@ -283,9 +284,11 @@ export function openDetails(o) {
         <li class="${p.visible ? 'vis' : ''}">
           <div><b>${p.ongoing ? 'Now' : dt(p.start)}</b><span>${Math.round((p.end - p.start) / 60000)} min · ${cardinal(p.startAz)} → ${cardinal(p.endAz)}</span></div>
           <div class="pk"><b>${p.maxEl.toFixed(0)}°</b><span>max, ${cardinal(p.peakAz)} at ${t2(p.peakT)}</span></div>
-          <em>${p.visible ? 'Visible' : !p.sunlit ? 'In shadow' : 'Daylight'}</em>
+          <em>${p.visible
+            ? `Visible ${t3(p.visFrom)}–${t3(p.visTo)}${p.shadowEnter && p.shadowEnter <= p.visTo ? ' · then enters Earth’s shadow' : ''}${p.shadowExit && p.shadowExit >= p.visFrom ? ' · comes out of shadow first' : ''}`
+            : !p.sunlitAny ? 'In Earth’s shadow the whole pass' : 'Daylight (sky too bright)'}</em>
           ${p.ongoing ? '' : `<button class="cal" data-k="${ps.indexOf(p)}">Add to Calendar</button>`}
-        </li>`).join('')}</ul><p class="d-src">Passes above 10°. “Visible” = sunlit while your sky is dark.</p>`
+        </li>`).join('')}</ul><p class="d-src">Passes above 10°. “Visible” = in sunlight while your sky is dark (Sun below −6°). On the sky, the path is solid in sunlight and dotted in Earth’s shadow.</p>`
         : '<p class="muted">No passes above 10° in the next 3 days from your location.</p>';
       $('dPasses').onclick = (e) => {
         const b = e.target.closest('button.cal');

@@ -203,9 +203,7 @@ export class Sky {
   updateFast(date, list = this.satellites) {
     if (!this.gd || !list.length) return;
     const gmst = S.gstime(date);
-    const sun = this.sunEqj; // AU, EQJ ~ TEME for a shadow test
-    const sl = sun ? Math.hypot(sun.x, sun.y, sun.z) : 1;
-    const sh = sun ? [sun.x / sl, sun.y / sl, sun.z / sl] : [1, 0, 0];
+    const sun = this._sunKm(date); // Sun at THIS instant, same frame as SGP4 (equator of date)
     const tMs = date.getTime();
     for (const s of list) {
       const pv = S.propagate(s.satrec, date);
@@ -226,10 +224,7 @@ export class Sky {
       s.lat = S.degreesLat(geo.latitude);
       s.lon = S.degreesLong(geo.longitude);
       s.e = enu(s.az, s.alt);
-      // Cylindrical Earth-shadow test.
-      const d = p.x * sh[0] + p.y * sh[1] + p.z * sh[2];
-      const perp = Math.hypot(p.x - d * sh[0], p.y - d * sh[1], p.z - d * sh[2]);
-      s.sunlit = d > 0 || perp > 6378;
+      s.sunlit = Sky.sunlit(p, sun);
       s.height = Math.hypot(p.x, p.y, p.z) - 6371;
       if (pv.velocity) s.speed = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
     }
@@ -322,11 +317,18 @@ export class Sky {
     const pts = [];
     if (o.kind === 'satellite') {
       const tmp = { satrec: o.satrec };
+      const at = (ms) => { this.updateFast(new Date(ms), [tmp]); return tmp.dead ? null : { t: new Date(ms), e: tmp.e, alt: tmp.alt, sunlit: tmp.sunlit }; };
       for (let dt = -300; dt <= 600; dt += 10) {
-        const d = new Date(t0 + dt * 1000);
-        this.updateFast(d, [tmp]);
-        if (tmp.dead) break;
-        pts.push({ t: d, e: tmp.e, alt: tmp.alt });
+        const pt = at(t0 + dt * 1000);
+        if (!pt) break;
+        const prev = pts[pts.length - 1];
+        if (prev && prev.sunlit !== pt.sunlit) {
+          // Insert the exact shadow entry/exit so the line style switches at the right spot.
+          const edge = this._shadowEdge(o, prev.t.getTime(), pt.t.getTime());
+          const b = at(edge);
+          if (b) { b.sunlit = pt.sunlit; b.edge = pt.sunlit ? 'exit' : 'enter'; pts.push(b); }
+        }
+        pts.push(pt);
       }
       return { pts, tick: 60000, kind: 'sat' };
     }
@@ -422,11 +424,37 @@ export class Sky {
     return { el: look.elevation * R2D, az: look.azimuth * R2D, range: look.rangeSat, p: pv.position };
   }
 
-  _sunlitAt(p, d) {
-    const sv = A.GeoVector(A.Body.Sun, A.MakeTime(d), true);
-    const l = Math.hypot(sv.x, sv.y, sv.z), sh = [sv.x / l, sv.y / l, sv.z / l];
-    const dd = p.x * sh[0] + p.y * sh[1] + p.z * sh[2];
-    return dd > 0 || Math.hypot(p.x - dd * sh[0], p.y - dd * sh[1], p.z - dd * sh[2]) > 6378;
+  _sunlitAt(p, d) { return Sky.sunlit(p, this._sunKm(d)); }
+
+  // Geometric Sun position (km) at `date`, rotated from J2000 to the true equator & equinox
+  // of date, which is the frame SGP4 positions are in (TEME differs by < 0.01°).
+  _sunKm(date) {
+    const k = Math.floor(date.getTime() / 1000);
+    if (this._sunCache?.k === k) return this._sunCache.v;
+    const t = A.MakeTime(date);
+    const g = A.RotateVector(A.Rotation_EQJ_EQD(t), A.GeoVector(A.Body.Sun, t, false));
+    const v = [g.x * AU_KM, g.y * AU_KM, g.z * AU_KM];
+    this._sunCache = { k, v };
+    return v;
+  }
+
+  // Is the satellite in sunlight? True unless the Earth (R = 6378.137 km) blocks the straight
+  // line from the satellite to the Sun's centre: the standard test (same as Skyfield's).
+  static sunlit(p, sun) {
+    const ux = sun[0] - p.x, uy = sun[1] - p.y, uz = sun[2] - p.z;
+    const l = Math.hypot(ux, uy, uz);
+    const tca = -(p.x * ux + p.y * uy + p.z * uz) / l; // distance along the ray to closest approach
+    if (tca <= 0) return true; // Earth is behind the satellite as seen towards the Sun
+    const d2 = p.x * p.x + p.y * p.y + p.z * p.z - tca * tca;
+    return d2 > 6378.137 * 6378.137;
+  }
+
+  // Exact time (±0.25 s) the sunlit state changes between a and b (ms).
+  _shadowEdge(sat, a, b) {
+    const lit = (ms) => { const pv = S.propagate(sat.satrec, new Date(ms)); return pv?.position ? this._sunlitAt(pv.position, new Date(ms)) : false; };
+    const la = lit(a);
+    for (let i = 0; i < 16 && b - a > 250; i++) { const m = (a + b) / 2; if (lit(m) === la) a = m; else b = m; }
+    return (a + b) / 2;
   }
 
   sunAltAt(d) {
@@ -475,7 +503,28 @@ export class Sky {
           maxEl: P.el, peakAz: P.az, startAz: S.az, endAz: E.az,
           sunlit: this._sunlitAt(P.p, new Date(pk)), dark: this.sunAltAt(new Date(pk)) < -6,
         };
-        p.visible = p.sunlit && p.dark;
+        // Sunlit stretches during the pass, with exact shadow entry/exit times.
+        const lit = (ms) => { const st = this._satAt(sat, new Date(ms)); return st ? this._sunlitAt(st.p, new Date(ms)) : false; };
+        const segs = [];
+        let segStart = startMs, segLit = lit(startMs), segPrev = startMs;
+        for (let ms = startMs + 10000; ; ms += 10000) {
+          const m = Math.min(ms, endMs);
+          const l = lit(m);
+          if (l !== segLit) {
+            const edge = this._shadowEdge(sat, segPrev, m);
+            segs.push({ from: segStart, to: edge, sunlit: segLit });
+            if (segLit) p.shadowEnter = new Date(edge); else p.shadowExit = new Date(edge);
+            segStart = edge; segLit = l;
+          }
+          segPrev = m;
+          if (m >= endMs) break;
+        }
+        segs.push({ from: segStart, to: endMs, sunlit: segLit });
+        // Visible = sunlit while the observer's sky is dark (Sun below −6°).
+        const vis = segs.filter((g) => g.sunlit && this.sunAltAt(new Date((g.from + g.to) / 2)) < -6);
+        p.visible = vis.length > 0;
+        if (p.visible) { p.visFrom = new Date(vis[0].from); p.visTo = new Date(vis[vis.length - 1].to); }
+        p.sunlitAny = segs.some((g) => g.sunlit);
         out.push(p);
         startMs = null;
       }

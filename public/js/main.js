@@ -1077,7 +1077,13 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
     const below = pt.alt < 0 && pa.alt < 0;
     ctx.globalAlpha = (below ? 0.28 : 0.9) * (future ? 1 : 0.5) * (strong ? 1 : 0.85);
     ctx.lineWidth = strong ? 2.2 : 1.7;
-    ctx.setLineDash(future ? [7, 6] : []);
+    if (tr.kind === 'sat') {
+      // Satellites: solid while in sunlight (can be seen), dotted while in Earth's shadow.
+      // A segment's state is its start point's; exact shadow edges are inserted as points.
+      ctx.lineCap = 'round';
+      ctx.setLineDash(pa.sunlit ? [] : [0.1, strong ? 6 : 5]);
+      if (!pa.sunlit) ctx.lineWidth = strong ? 3 : 2.4;
+    } else ctx.setLineDash(future ? [7, 6] : []);
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   }
   ctx.setLineDash([]);
@@ -1118,6 +1124,24 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
     ctx.beginPath(); ctx.arc(p[0], p[1], 4, 0, 7); ctx.fill();
     pill(`${b.alt > a.alt ? 'Rises' : 'Sets'} ${hhmm(when)}`, p[0] + 7, p[1] - 14, col, 0.95, 10.5, true);
     labels.push(p);
+  }
+
+  // Satellites: mark where it enters / leaves Earth's shadow.
+  if (tr.kind === 'sat' && (strong || !compact)) {
+    for (let i = 0; i < tr.pts.length; i++) {
+      const pt = tr.pts[i];
+      if (!pt.edge) continue;
+      const p = P[i];
+      if (!onScreen(p, -10)) continue;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#04060d'; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(p[0], p[1], 5, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(p[0], p[1], 5, pt.edge === 'enter' ? -Math.PI / 2 : Math.PI / 2, pt.edge === 'enter' ? Math.PI / 2 : Math.PI * 1.5); ctx.fill();
+      const when = pt.t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      pill(`${pt.edge === 'enter' ? 'Enters shadow' : 'Leaves shadow'} ${when}`, p[0] + 8, p[1] + 14, col, 0.95, 10.5, true);
+      labels.push(p);
+    }
   }
 
   // Direction-of-motion arrow just ahead of "now"
@@ -1587,7 +1611,7 @@ function updateHover(x, y) {
   state.mouseHover = o;
   canvas.style.cursor = o ? 'pointer' : '';
   if (!o) { tip.classList.add('hidden'); return; }
-  const tr = o.kind === 'satellite' ? 'path: 5 min ago → 10 min ahead' : 'path: daily arc, hour marks';
+  const tr = o.kind === 'satellite' ? 'path −5 → +10 min · solid = sunlit, dotted = in Earth’s shadow' : 'path: daily arc, hour marks';
   tip.innerHTML = `<b>${escapeHtml(displayName(o))}</b> · ${escapeHtml(fmtDist(o, true))}<br><span class="muted">${tr} · click for details</span>`;
   tip.style.left = `${Math.min(x + 14, state.W - 240)}px`;
   tip.style.top = `${Math.max(8, y - 50)}px`;
