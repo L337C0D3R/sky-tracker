@@ -118,7 +118,11 @@ function toast(msg, ms = 3500) {
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const SAT_ALIASES = { 'ISS (ZARYA)': 'ISS', 'CSS (TIANHE)': 'Tiangong (CSS)' };
 function satName(n) { return SAT_ALIASES[n] || n.replace(/\s+DEB$/, ' debris').replace(/\s+/g, ' ').trim(); }
-function displayName(o) { return o.kind === 'satellite' ? satName(o.name) : o.name; }
+function displayName(o) {
+  if (o.kind === 'satellite') return satName(o.name);
+  if (o.kind === 'star' && !o.name) return o.hip ? `HIP ${o.hip}` : 'Star';
+  return o.name;
+}
 function satClass(s) { return s.type === 'Space station' ? 'station' : s.type === 'Starlink satellite' ? 'starlink' : 'other'; }
 function colorOf(o) {
   if (o.kind === 'planet') return PLANET_COLORS[o.name];
@@ -266,7 +270,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------------- Sharing & deep links ----------------
 const CARD_LONG = { N: 'north', NNE: 'north-northeast', NE: 'northeast', ENE: 'east-northeast', E: 'east', ESE: 'east-southeast', SE: 'southeast', SSE: 'south-southeast', S: 'south', SSW: 'south-southwest', SW: 'southwest', WSW: 'west-southwest', W: 'west', WNW: 'west-northwest', NW: 'northwest', NNW: 'north-northwest' };
 function linkFor(o) {
-  const key = o.kind === 'satellite' ? o.norad : o.name;
+  const key = o.kind === 'satellite' ? o.norad : displayName(o);
   return `${location.origin}${location.pathname}?t=${encodeURIComponent(key)}`;
 }
 async function shareObject(o) {
@@ -287,7 +291,8 @@ function openDeepLink() {
   const attempt = () => {
     const k = key.toLowerCase();
     const o = /^\d+$/.test(key) ? sky.satellites.find((s) => s.norad === key)
-      : sky.objects.find((x) => x.name.toLowerCase() === k || displayName(x).toLowerCase() === k);
+      : /^hip \d+$/.test(k) ? sky.stars.find((x) => `hip ${x.hip}` === k)
+        : sky.objects.find((x) => x.name.toLowerCase() === k || displayName(x).toLowerCase() === k);
     if (o && state.located) {
       sky.updateSlow(new Date());
       sky.updateFast(new Date(), sky.satellites.filter((s) => s === o));
@@ -586,7 +591,8 @@ function draw(now) {
   drawGround(ar);
   if (state.nearest) { drawNearest(zs); drawTarget(now); return; }
   if (state.layers.grid) drawGrid();
-  if (state.layers.constellations) drawConstellations(ar);
+  // In camera mode by daylight the stars are hidden, so their stick figures are too.
+  if (state.layers.constellations && !(ar && (sky.sunAlt ?? -30) > -3)) drawConstellations(ar);
 
   // Paths: the selected target, plus whatever is hovered (mouse) or under the crosshair.
   if (state.layers.paths !== false) {
@@ -596,7 +602,12 @@ function draw(now) {
   }
 
   // Stars (catalogue sorted bright → faint)
-  const magLimit = clamp((ar ? 4.2 : 4.6) + Math.log2(state.zoom) * 0.9, 3.5, 6);
+  // In camera mode only draw stars the sky actually lets you see: the limit follows the
+  // Sun's altitude (night → twilight → day). Sky map mode always shows the full night sky.
+  const sunAlt = sky.sunAlt ?? -30;
+  const skyLimit = !ar ? 4.6 : sunAlt > 0 ? -0.5 : sunAlt > -6 ? 1.0 : sunAlt > -12 ? 3.0 : 4.2;
+  const magLimit = clamp(skyLimit + Math.log2(state.zoom) * 0.9, -2, 6);
+  state.magLimit = magLimit;
   ctx.textAlign = 'left';
   for (const s of sky.stars) {
     if (s.mag > magLimit) break;
@@ -609,8 +620,8 @@ function draw(now) {
     if (s.mag < 1.5) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8; }
     ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
     ctx.shadowBlur = 0;
+    considerCenter(s, p, r); // every drawn dot can be identified
     if (s.name) {
-      considerCenter(s, p, r);
       if (state.layers.starLabels && s.mag < (ar ? 2.0 : 2.4) + Math.log2(state.zoom) * 0.8) {
         text(s.ly ? `${s.name} · ${fmtDist(s, true)}` : s.name, p[0] + r + 5, p[1] + 4, 'rgba(225,232,255,.8)', 11.5, 500);
       }
@@ -869,7 +880,9 @@ function crosshairReadout() {
   const ret = $('reticle');
   if (c && c !== state.target) {
     const extra = c.kind === 'satellite' ? `${fmtDist(c)} from you · ${Math.round(c.height)} km up`
-      : `${c.kind === 'star' ? 'Star' : c.type}${fmtDist(c, true) !== '—' ? ` · ${fmtDist(c, true)} from you` : ''}`;
+      : c.kind === 'star'
+        ? [c.name ? null : 'Star', `mag ${c.mag.toFixed(1)}`, fmtDist(c, true) !== '—' ? `${fmtDist(c, true)} away` : null, c.con || null].filter(Boolean).join(' · ')
+        : `${c.type}${fmtDist(c, true) !== '—' ? ` · ${fmtDist(c, true)} from you` : ''}`;
     ret.innerHTML = `<b>${escapeHtml(displayName(c))}</b> · <span class="muted">${escapeHtml(extra)}</span>`;
     ret.classList.remove('hidden');
   } else ret.classList.add('hidden');
@@ -1505,7 +1518,8 @@ function bindUI() {
 function nearestAt(x, y, radius = 30) {
   if (!B) return null;
   let best = null, bd = radius;
-  const cands = [...sky.planets, ...sky.asteroids, ...sat.vis.filter((s) => s.alt > 0 && !s.dead), ...sky.stars.filter((s) => s.name && s.mag < 5)];
+  const lim = state.magLimit ?? 5;
+  const cands = [...sky.planets, ...sky.asteroids, ...sat.vis.filter((s) => s.alt > 0 && !s.dead), ...sky.stars.filter((s) => s.mag <= lim)];
   for (const o of cands) {
     const p = project(o.e);
     if (!p) continue;
