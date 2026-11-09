@@ -87,7 +87,7 @@ export class Orientation {
     this.lastEvent = 0;
     // iOS compass fusion state
     this.ios = { delta: null, acquiredAt: 0, lastT: 0, stillSince: 0, prev: null, speed: 0, outlierT: 0,
-      model: load('iosHeadingModel', 'top'), votes: { top: 0, cam: 0 }, agnostic: null };
+      trusted: false, trustedAt: 0, regime: null, splitModel: load('iosSplitModel', null), votes: { top: 0, cam: 0 } };
     // smoothing state
     this.q = null;
     this.qt = 0;
@@ -122,6 +122,7 @@ export class Orientation {
   get status() {
     if (!this.hasSensor) return null;
     if (this.isIOS && this.ios.delta == null) return 'finding north: hold still';
+    if (this.isIOS && !this.ios.trusted && !this.ios.splitModel) return 'north is provisional: lower the phone for a second';
     return null;
   }
 
@@ -147,6 +148,15 @@ export class Orientation {
   }
 
   // Learns delta = (magnetic north frame) − (gyro frame), as an azimuth rotation.
+  //
+  // iOS's heading has a certain meaning only in some poses:
+  //  • flat (screen up): bearing of the phone's top edge, as in the Compass app;
+  //  • held normally (camera towards the horizon/ground): top edge and camera point the
+  //    same way, so either definition gives the same answer.
+  // When the camera points UP (or the phone is upside down) the top edge and the camera
+  // point opposite ways; real iPhones report the camera's direction there ('cam'). That
+  // is used by default, verified against trusted readings whenever both are seen, and
+  // the verified answer is remembered for next time.
   _iosFuse(ax, heading, accuracy, now) {
     const s = this.ios;
     // How fast is the phone turning? (gyro frame, no compass involved)
@@ -164,36 +174,53 @@ export class Orientation {
     if (!(heading >= 0)) return;
     if (accuracy != null && accuracy < 0 && s.delta != null) return; // iOS says: compass needs calibration
 
-    // Candidate bearings in the gyro frame: top edge (what CLHeading measures) and camera.
     const Yh = Math.hypot(ax.Y[0], ax.Y[1]);
     const F = [-ax.Z[0], -ax.Z[1], -ax.Z[2]];
     const Fh = Math.hypot(F[0], F[1]);
     const bTop = bearing(ax.Y), bCam = bearing(F);
-    const settledMs = s.delta == null ? 250 : 700; // let iOS's own heading filter catch up after motion
-    const settled = now - s.stillSince > settledMs;
-
-    // Self-check of how iOS defines the heading (top edge vs camera): when both
-    // bearings agree the sample is unambiguous; when they are opposite, it tells the two apart.
-    if (settled && Yh > 0.5 && Fh > 0.5) {
-      const sep = Math.abs(wrap180(bTop - bCam));
-      if (sep < 15) s.agnostic = { d: wrap180(heading - bTop), t: now };
-      else if (sep > 165 && s.agnostic && now - s.agnostic.t < 60000) {
-        const dTop = Math.abs(wrap180(heading - bTop - s.agnostic.d)), dCam = Math.abs(wrap180(heading - bCam - s.agnostic.d));
-        if (dTop < 25 && dCam > 120) s.votes.top++;
-        else if (dCam < 25 && dTop > 120) s.votes.cam++;
-        const lead = s.votes.cam - s.votes.top;
-        if (s.model === 'top' && lead > 40) { s.model = 'cam'; save('iosHeadingModel', 'cam'); s.delta = null; }
-        else if (s.model === 'cam' && lead < -40) { s.model = 'top'; save('iosHeadingModel', 'top'); s.delta = null; }
-      }
-    }
-
-    // Use the sample only where the measured axis is well away from vertical.
-    const useTop = s.model === 'top';
-    const h = useTop ? Yh : Fh;
-    if (h < (s.delta == null ? 0.25 : 0.5)) return;
+    const sep = Math.abs(wrap180(bTop - bCam));
+    let regime = null;
+    if (ax.Z[2] > 0.85 && Yh > 0.5) regime = 'flat'; // lying flat: Compass-app pose
+    else if (Yh > 0.2 && Fh > 0.4 && sep < 20) regime = 'agree'; // held normally: top edge & camera agree
+    else if (Yh > 0.2 && Fh > 0.4 && sep > 160) regime = 'split'; // pointing up / upside down
+    else if (Yh <= 0.2 && Fh > 0.9) regime = 'split'; // upright at the horizon: top edge vertical, only the camera has a bearing
+    s.regime = regime;
+    if (!regime) return; // both axes near vertical: heading meaningless there
+    const settled = now - s.stillSince > (s.delta == null ? 250 : 700); // iOS's heading filter lags motion
     if (!settled) return;
-    const cand = wrap180(heading - (useTop ? bTop : bCam));
-    if (s.delta == null) { s.delta = cand; s.acquiredAt = now; s.outlierT = 0; return; }
+
+    const candTop = wrap180(heading - bTop), candCam = wrap180(heading - bCam);
+    if (regime !== 'split') {
+      this._applyDelta(candTop, true, accuracy, dt, now);
+      return;
+    }
+    // Split pose. Learn which definition this phone uses by checking both against
+    // a north that was established from trusted readings (and carried by the gyro).
+    if (s.trusted && now - s.trustedAt < 90000 && s.delta != null) {
+      const eTop = Math.abs(wrap180(candTop - s.delta)), eCam = Math.abs(wrap180(candCam - s.delta));
+      if (eCam < 20 && eTop > 140) s.votes.cam++;
+      else if (eTop < 20 && eCam > 140) s.votes.top++;
+      const lead = s.votes.cam - s.votes.top;
+      if (lead >= 25 && s.splitModel !== 'cam') { s.splitModel = 'cam'; save('iosSplitModel', 'cam'); }
+      if (lead <= -25 && s.splitModel !== 'top') { s.splitModel = 'top'; save('iosSplitModel', 'top'); }
+    }
+    const model = s.splitModel || 'cam';
+    const verified = !!s.splitModel;
+    if (model === 'top' && Yh <= 0.2) return; // top-edge bearing undefined when upright
+    // Without trusted north, a split reading is still the best we have (provisional).
+    if (s.trusted && !verified) return; // keep trusted north; don't let an unverified reading move it
+    this._applyDelta(model === 'cam' ? candCam : candTop, verified, accuracy, dt, now);
+  }
+
+  _applyDelta(cand, trusted, accuracy, dt, now) {
+    const s = this.ios;
+    if (s.delta == null || (trusted && !s.trusted)) {
+      // First fix, or first trusted fix after a provisional one: take it directly.
+      if (s.delta == null || Math.abs(wrap180(cand - s.delta)) > 3) { s.delta = cand; s.acquiredAt = now; }
+      s.outlierT = 0;
+      if (trusted) { s.trusted = true; s.trustedAt = now; }
+      return;
+    }
     const err = wrap180(cand - s.delta);
     const acquiring = now - s.acquiredAt < 3000;
     if (!acquiring && Math.abs(err) > 25) {
@@ -203,6 +230,7 @@ export class Orientation {
       return;
     }
     s.outlierT = 0;
+    if (trusted) s.trustedAt = now;
     const poor = accuracy != null && accuracy > 25;
     const tau = acquiring ? 0.5 : poor ? 12 : 5; // seconds
     s.delta = wrap180(s.delta + err * (1 - Math.exp(-dt / tau)));
