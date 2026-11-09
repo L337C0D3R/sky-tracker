@@ -97,7 +97,8 @@ function wikiTitlesFor(o) {
 const satcatCache = new Map();
 function satcat(norad) {
   if (!satcatCache.has(norad)) {
-    satcatCache.set(norad, fetch(`api/satcat?id=${norad}`).then((r) => (r.ok ? r.json() : null)).catch(() => null));
+    satcatCache.set(norad, fetch(`api/satcat?id=${norad}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      .then((v) => { if (!v) satcatCache.delete(norad); return v; })); // don't remember failures
   }
   return satcatCache.get(norad);
 }

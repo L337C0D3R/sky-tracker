@@ -121,8 +121,8 @@ export class Orientation {
   // Human-readable compass state for the HUD.
   get status() {
     if (!this.hasSensor) return null;
-    if (this.isIOS && this.ios.delta == null) return 'finding north: hold still';
-    if (this.isIOS && !this.ios.trusted && !this.ios.splitModel) return 'north is provisional: lower the phone for a second';
+    if (this.isIOS && this.ios.delta == null) return 'finding north…';
+    if (this.isIOS && !this.ios.trusted && !this.ios.splitModel) return 'north provisional';
     return null;
   }
 

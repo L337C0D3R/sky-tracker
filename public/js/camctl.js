@@ -328,6 +328,7 @@ export function initCamControls(videoEl, fxCanvas, { onZoom, onLens, onStall: st
     $('camSheet').classList.toggle('hidden');
     syncUi();
     readout();
+    diagnostics();
   };
   $('camClose').onclick = () => $('camSheet').classList.add('hidden');
   $('camPresets').onclick = (e) => {

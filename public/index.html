@@ -50,29 +50,48 @@
   <div id="reticle" class="hidden"></div>
   <div id="hoverTip" class="hidden"></div>
 
-  <button id="btnNear" aria-label="Show only the 10 nearest satellites">
+  <!-- Right-hand controls: one column that always fits between the top bar and the toolbar -->
+  <div id="rightCol">
+    <button id="btnNear" aria-label="Show only the 10 nearest satellites">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6.5" stroke-dasharray="2 2.6"/><circle cx="12" cy="12" r="10.2" stroke-dasharray="2 3"/><circle cx="18.5" cy="8" r="1.6" fill="currentColor"/></svg><span>Near 10</span>
   </button>
+    <button id="camBtn" class="hidden" aria-label="Night camera settings">
+    <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg><span>Night</span>
+  </button>
+    <div id="zoomCtl" class="hidden">
+      <button id="zIn" aria-label="Zoom in">+</button>
+      <button id="zoomVal" aria-label="Reset zoom">1×</button>
+      <button id="zOut" aria-label="Zoom out">−</button>
+    </div>
+  </div>
+  <!-- Notices: one stack, clear of the right-hand column and behind cards/panels -->
+  <div id="notices">
+    <div id="toast" class="hidden"></div>
+    <button id="btnSensors" class="pill-btn hidden">Enable compass &amp; motion</button>
+    <div id="camBanner" class="hidden"><span id="camMsg"></span><button id="camRetry">Retry camera</button></div>
+    <div id="darkHint" class="hidden">
+      <span><b>Camera is on.</b> The night sky is too dim for it at normal settings.</span>
+      <button id="darkBoost">Brighten</button>
+      <button id="darkClose" class="icon" aria-label="Dismiss">✕</button>
+    </div>
+    <div id="northNote" class="hidden"><span>Lower the phone for a second to lock north precisely.</span><button id="northClose" class="icon" aria-label="Dismiss">✕</button></div>
+    <div id="iosHint" class="hidden">
+      <img src="apple-touch-icon.png" alt="" />
+      <div>Install SkyTracker: tap <svg viewBox="0 0 24 24" aria-label="Share"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg> <b>Share</b>, then <b>Add to Home Screen</b> for full-screen use.</div>
+      <button id="iosHintClose" class="icon" aria-label="Dismiss">✕</button>
+    </div>
+    <div id="installHint" class="hidden">
+      <img src="icon-192.png" alt="" />
+      <div><b>Install SkyTracker</b><br><span class="muted">Full screen, faster start, works offline.</span></div>
+      <button id="installBtn">Install</button>
+      <button id="installClose" class="icon" aria-label="Dismiss">✕</button>
+    </div>
+  </div>
   <section id="nearPanel" class="hidden">
     <div id="nearHead"><span class="pulse"></span><b>10 nearest satellites</b><span class="muted small">live distance</span><button id="nearOff">Show all</button></div>
     <ol id="nearList"></ol>
   </section>
-  <button id="camBtn" class="hidden" aria-label="Night camera settings">
-    <svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg><span>Night</span>
-  </button>
-  <div id="zoomCtl" class="hidden">
-    <button id="zIn" aria-label="Zoom in">+</button>
-    <button id="zoomVal" aria-label="Reset zoom">1×</button>
-    <button id="zOut" aria-label="Zoom out">−</button>
-  </div>
 
-  <button id="btnSensors" class="pill-btn hidden">Enable compass &amp; motion</button>
-  <div id="camBanner" class="hidden"><span id="camMsg"></span><button id="camRetry">Retry camera</button></div>
-  <div id="darkHint" class="hidden">
-    <span><b>Camera is on.</b> The picture is very dark because the night sky is too dim for a phone camera at normal settings.</span>
-    <button id="darkBoost">Brighten</button>
-    <button id="darkClose" class="icon" aria-label="Dismiss">✕</button>
-  </div>
 
   <nav id="toolbar" class="hidden">
     <button id="btnSearch" aria-label="Find object">
@@ -94,12 +113,11 @@
         <div id="tType"></div>
       </div>
       <button id="tInfo" class="info-btn" aria-label="More information">Details</button>
-      <button id="tMore" class="icon" aria-label="Expand">▾</button>
       <button id="tClose" class="icon" aria-label="Clear target">✕</button>
     </div>
     <div id="tGuide" class="guide"></div>
     <div id="tQuick" class="quick"></div>
-    <div id="tDetails" class="collapsed">
+    <div id="tDetails" class="collapsed hidden">
       <div id="tStats" class="stats"></div>
       <div id="tExtra" class="extra"></div>
       <div class="row gap">
@@ -222,19 +240,7 @@
     </div>
   </section>
 
-  <div id="iosHint" class="hidden">
-    <img src="apple-touch-icon.png" alt="" />
-    <div>Install SkyTracker: tap <svg viewBox="0 0 24 24" aria-label="Share"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg> <b>Share</b>, then <b>Add to Home Screen</b> for full-screen use.</div>
-    <button id="iosHintClose" class="icon" aria-label="Dismiss">✕</button>
-  </div>
-  <div id="installHint" class="hidden">
-    <img src="icon-192.png" alt="" />
-    <div><b>Install SkyTracker</b><br><span class="muted">Full screen, faster start, works offline.</span></div>
-    <button id="installBtn">Install</button>
-    <button id="installClose" class="icon" aria-label="Dismiss">✕</button>
-  </div>
   <div id="redMode" aria-hidden="true"></div>
-  <div id="toast" class="hidden"></div>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

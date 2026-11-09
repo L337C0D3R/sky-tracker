@@ -29,9 +29,16 @@ export function enu(az, alt) {
 }
 
 // Saemundsson/Bennett-style refraction in degrees for a true altitude.
-function refraction(alt) {
-  if (alt < -1) return 0;
-  return 1.02 / 60 / Math.tan((alt + 10.3 / (alt + 5.11)) * D2R);
+// Atmospheric refraction (degrees) for a TRUE altitude, Saemundsson's formula
+// (standard 10 °C, 1010 hPa). Used for every object so stars, planets and asteroids
+// are consistent. Light from below the horizon never reaches you, so it fades
+// smoothly to zero between 0° and −2° instead of jumping.
+const REFR0 = 1.02 / 60 / Math.tan((10.3 / 5.11) * Math.PI / 180);
+let refrScale = 1; // air pressure relative to sea level (thinner air bends light less)
+export function refraction(alt) {
+  if (alt >= 0) return refrScale * 1.02 / 60 / Math.tan((alt + 10.3 / (alt + 5.11)) * D2R);
+  if (alt <= -2) return 0;
+  return refrScale * REFR0 * (1 + alt / 2);
 }
 
 export class Sky {
@@ -46,6 +53,7 @@ export class Sky {
   }
 
   setLocation(lat, lon, elevM = 0) {
+    refrScale = Math.exp(-Math.max(0, elevM || 0) / 8400); // barometric scale height ≈ 8.4 km
     this.observer = new A.Observer(lat, lon, elevM);
     this.gd = { latitude: lat * D2R, longitude: lon * D2R, height: elevM / 1000 };
   }
@@ -205,7 +213,8 @@ export class Sky {
       const p = pv.position;
       const look = S.ecfToLookAngles(this.gd, S.eciToEcf(p, gmst));
       s.az = look.azimuth * R2D;
-      s.alt = look.elevation * R2D;
+      s.altTrue = look.elevation * R2D; // geometric (used for pass maths)
+      s.alt = s.altTrue + refraction(s.altTrue); // where it appears in the sky
       // Range rate (km/s, + = receding), smoothed over successive updates.
       if (s._t && tMs - s._t > 40 && tMs - s._t < 5000) {
         const rr = (look.rangeSat - s._r) / ((tMs - s._t) / 1000);
@@ -245,8 +254,9 @@ export class Sky {
 
   _planet(body, t) {
     const eq = A.Equator(body, t, this.observer, true, true);
-    const h = A.Horizon(t, this.observer, eq.ra, eq.dec, 'normal');
-    return { az: h.azimuth, alt: h.altitude, ra: eq.ra, dec: eq.dec, dist: eq.dist, e: enu(h.azimuth, h.altitude) };
+    const h = A.Horizon(t, this.observer, eq.ra, eq.dec, null);
+    const alt = h.altitude + refraction(h.altitude);
+    return { az: h.azimuth, alt, altTrue: h.altitude, ra: eq.ra, dec: eq.dec, dist: eq.dist, e: enu(h.azimuth, alt) };
   }
 
   // Two-body Kepler propagation of today's osculating elements (sub-arcsecond over days).
@@ -281,7 +291,9 @@ export class Sky {
     }
     const dist = Math.hypot(...g);
     const hor = A.RotateVector(rot, new A.Vector(g[0], g[1], g[2], t));
-    const sph = A.HorizonFromVector(hor, 'normal');
+    const sph = A.HorizonFromVector(hor, null);
+    a.altTrue = sph.lat;
+    sph.lat += refraction(sph.lat);
     a.az = sph.lon; a.alt = sph.lat; a.dist = dist; a.e = enu(a.az, a.alt);
     // H-G magnitude
     const h = Sky.helio(a.el, jd - tau);
@@ -428,26 +440,46 @@ export class Sky {
   passes(sat, date, hours = 48, max = 5, minEl = 10) {
     const out = [];
     const t0 = date.getTime();
-    let cur = null;
-    for (let s = 0; s <= hours * 3600 && out.length < max; s += 20) {
-      const d = new Date(t0 + s * 1000);
-      const st = this._satAt(sat, d);
-      if (!st) break;
-      if (st.el >= minEl) {
-        if (!cur) cur = { start: d, startAz: st.az, peak: st, peakT: d, ongoing: s === 0 };
-        if (st.el > cur.peak.el) { cur.peak = st; cur.peakT = d; }
-      } else if (cur) {
-        cur.end = d;
-        cur.endAz = st.az;
-        cur.maxEl = cur.peak.el;
-        cur.peakAz = cur.peak.az;
-        cur.sunlit = this._sunlitAt(cur.peak.p, cur.peakT);
-        cur.dark = this.sunAltAt(cur.peakT) < -6;
-        cur.visible = cur.sunlit && cur.dark;
-        delete cur.peak;
-        out.push(cur);
-        cur = null;
+    const elAt = (ms) => this._satAt(sat, new Date(ms))?.el ?? -90;
+    // Exact threshold crossing between a (below) and b (above) or vice versa: bisection to 0.25 s.
+    const cross = (a, b) => {
+      const up = elAt(a) < minEl;
+      for (let i = 0; i < 12 && b - a > 250; i++) {
+        const m = (a + b) / 2;
+        if ((elAt(m) < minEl) === up) a = m; else b = m;
       }
+      return (a + b) / 2;
+    };
+    // Highest point: golden-section search on [a, b].
+    const peak = (a, b) => {
+      const g = (Math.sqrt(5) - 1) / 2;
+      let c = b - g * (b - a), d = a + g * (b - a), fc = elAt(c), fd = elAt(d);
+      for (let i = 0; i < 30 && b - a > 200; i++) {
+        if (fc > fd) { b = d; d = c; fd = fc; c = b - g * (b - a); fc = elAt(c); }
+        else { a = c; c = d; fc = fd; d = a + g * (b - a); fd = elAt(d); }
+      }
+      return (a + b) / 2;
+    };
+    const step = 20000;
+    let prevMs = t0, prevEl = elAt(t0), startMs = null, ongoing = false;
+    if (prevEl >= minEl) { startMs = t0; ongoing = true; }
+    for (let ms = t0 + step; ms <= t0 + hours * 3600000 && out.length < max; ms += step) {
+      const el = elAt(ms);
+      if (el >= minEl && prevEl < minEl) { startMs = cross(prevMs, ms); ongoing = false; }
+      else if (el < minEl && prevEl >= minEl && startMs != null) {
+        const endMs = cross(prevMs, ms);
+        const pk = peak(startMs, endMs);
+        const P = this._satAt(sat, new Date(pk)), S = this._satAt(sat, new Date(startMs)), E = this._satAt(sat, new Date(endMs));
+        const p = {
+          start: new Date(startMs), end: new Date(endMs), peakT: new Date(pk), ongoing,
+          maxEl: P.el, peakAz: P.az, startAz: S.az, endAz: E.az,
+          sunlit: this._sunlitAt(P.p, new Date(pk)), dark: this.sunAltAt(new Date(pk)) < -6,
+        };
+        p.visible = p.sunlit && p.dark;
+        out.push(p);
+        startMs = null;
+      }
+      prevMs = ms; prevEl = el;
     }
     return out;
   }

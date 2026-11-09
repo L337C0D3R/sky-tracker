@@ -159,6 +159,7 @@ async function init() {
       if (state.mode !== 'ar' || state.darkHinted) return;
       state.darkHinted = true;
       $('darkHint').classList.remove('hidden');
+      setTimeout(() => $('darkHint').classList.add('hidden'), 15000);
     },
   });
   camctl.setOpenHandler((id) => attachStream(() => camctl.open(id)));
@@ -201,7 +202,7 @@ function setLocation(lat, lon, elev, label) {
   sky.setLocation(lat, lon, elev);
   state.located = true;
   state.locLabel = label;
-  $('loc').textContent = `${label} · ${lat.toFixed(3)}°, ${lon.toFixed(3)}°`;
+  $('loc').textContent = innerWidth < 430 ? label : `${label} · ${lat.toFixed(3)}°, ${lon.toFixed(3)}°`;
   $('lat').value = lat.toFixed(5);
   $('lon').value = lon.toFixed(5);
   state.lastSlow = -1e9;
@@ -229,12 +230,12 @@ function startGps() {
       state.gps = { lat, lon, acc: accuracy, at: Date.now() };
       if (state.locLabel?.startsWith('GPS') && Math.abs(prev.latitude - lat) < 0.001 && Math.abs(prev.longitude - lon) < 0.001) {
         state.locLabel = acc;
-        $('loc').textContent = text;
+        $('loc').textContent = innerWidth < 430 ? acc : text;
         return;
       }
       state.gps = { lat, lon, acc: accuracy, at: Date.now() };
       setLocation(lat, lon, altitude || 0, acc);
-      $('loc').textContent = text;
+      $('loc').textContent = innerWidth < 430 ? acc : text;
       save('loc', { lat, lon, elev: altitude || 0 });
     },
     (e) => toast(`Location: ${e.message}. Using approximate location; you can set it under Layers.`),
@@ -242,14 +243,19 @@ function startGps() {
   );
 }
 
-async function loadGroup(g) {
+// Loads a satellite group; retries with back-off (5 s, 15 s, 45 s, then every 2 min)
+// so a brief CelesTrak/network hiccup never leaves the sky empty for the session.
+async function loadGroup(g, attempt = 0) {
   try {
     const n = await sky.loadSatGroup(g);
     satStatus();
     sat.cursor = 0;
     return n;
   } catch (e) {
-    $('satStatus').textContent = `Could not load ${g}: ${e.message}`;
+    $('satStatus').textContent = `Could not load ${g} (${e.message}); retrying…`;
+    if (attempt === 1 && !sky.satellites.length) toast('Satellite data is temporarily unavailable. Retrying automatically…', 5000);
+    const wait = [5000, 15000, 45000][attempt] ?? 120000;
+    setTimeout(() => { if (state.satGroups.includes(g)) loadGroup(g, attempt + 1); }, wait);
   }
 }
 function satStatus() {
@@ -504,6 +510,7 @@ function frame(now) {
   B = orient.update(state.mode === 'ar' ? state.zoom : 1);
   state.f = focal();
   updateSatellites(date, now);
+  layoutVars(now);
   if (state.mode === 'ar') camctl.frame(now);
   state.center = null;
   draw(now);
@@ -513,6 +520,43 @@ function frame(now) {
 
 // Whole catalogue is swept in slices (~3×/s) to find who is near/above the horizon;
 // those inside the view are re-propagated every frame so they move smoothly.
+// ---------------- Layout manager ----------------
+// Measures the real top bar, toolbar, target card and Near-10 panel, and tells the CSS how
+// much room the right-hand column and the notices actually have (no fixed guesses).
+let layoutAt = 0;
+function layoutVars(now) {
+  if (now - layoutAt < 200) return;
+  layoutAt = now;
+  const rs = document.documentElement.style;
+  const vis = (el) => el && !el.classList.contains('hidden') && getComputedStyle(el).display !== 'none' ? el.getBoundingClientRect() : null;
+  const hud = vis($('hud'));
+  const hudBottom = hud ? Math.round(hud.bottom) : 0;
+  rs.setProperty('--hud-bottom', `${hudBottom}px`);
+  // While a panel is open, only pop-up messages show (above it); other notices wait.
+  document.body.classList.toggle('sheet-open', [...document.querySelectorAll('.sheet')].some((x) => !x.classList.contains('hidden')));
+  // Bottom obstacles that share the right-hand column's horizontal strip.
+  const colLeft = innerWidth - 64; // the column is 48 px wide, 12 px from the edge
+  let block = 12;
+  for (const id of ['toolbar', 'target', 'nearPanel']) {
+    const r = vis($(id));
+    if (r && r.right > colLeft) block = Math.max(block, Math.round(innerHeight - r.top + 8));
+  }
+  rs.setProperty('--bottom-block', `${block}px`);
+  // Top: only the top-bar pieces that actually reach the column's strip.
+  let top = 0;
+  for (const el of [document.querySelector('.hud-right'), $('tape'), $('liveChip'), document.querySelector('.hud-heading')]) {
+    const r = vis(el);
+    if (r && r.right > colLeft) top = Math.max(top, Math.round(r.bottom));
+  }
+  rs.setProperty('--col-top', `${top + 8}px`);
+  const avail = innerHeight - block - (top + 8);
+  const col = $('rightCol');
+  // Full size needs ~290 px; compact ~210; without Night ~160; without zoom just Near 10.
+  col.classList.toggle('tight', avail < 290);
+  col.classList.toggle('tiny', avail < 210);
+  col.classList.toggle('micro', avail < 160);
+}
+
 // Adaptive quality: slower phones sweep the catalogue over more frames.
 const perf = { avg: 16, last: 0, slow: false };
 function trackFrameTime(now) {
@@ -591,8 +635,7 @@ function draw(now) {
   drawGround(ar);
   if (state.nearest) { drawNearest(zs); drawTarget(now); return; }
   if (state.layers.grid) drawGrid();
-  // In camera mode by daylight the stars are hidden, so their stick figures are too.
-  if (state.layers.constellations && !(ar && (sky.sunAlt ?? -30) > -3)) drawConstellations(ar);
+  if (state.layers.constellations) drawConstellations(ar);
 
   // Paths: the selected target, plus whatever is hovered (mouse) or under the crosshair.
   if (state.layers.paths !== false) {
@@ -602,12 +645,12 @@ function draw(now) {
   }
 
   // Stars (catalogue sorted bright → faint)
-  // In camera mode only draw stars the sky actually lets you see: the limit follows the
-  // Sun's altitude (night → twilight → day). Sky map mode always shows the full night sky.
+  // Stars are always drawn (an AR finder must show where things are even when the sky is
+  // too bright to see them); by daylight they're drawn slightly dimmer.
   const sunAlt = sky.sunAlt ?? -30;
-  const skyLimit = !ar ? 4.6 : sunAlt > 0 ? -0.5 : sunAlt > -6 ? 1.0 : sunAlt > -12 ? 3.0 : 4.2;
-  const magLimit = clamp(skyLimit + Math.log2(state.zoom) * 0.9, -2, 6);
+  const magLimit = clamp((ar ? 4.2 : 4.6) + Math.log2(state.zoom) * 0.9, 3.5, 6);
   state.magLimit = magLimit;
+  const dayDim = ar && sunAlt > -6 ? 0.75 : 1;
   ctx.textAlign = 'left';
   for (const s of sky.stars) {
     if (s.mag > magLimit) break;
@@ -616,7 +659,7 @@ function draw(now) {
     if (!onScreen(p, 4)) continue;
     const r = Math.max(0.6, (magLimit + 1.2 - s.mag) * 0.48) * zs;
     ctx.fillStyle = bvColor(s.bv);
-    ctx.globalAlpha = s.alt < 0 ? 0.35 : 1;
+    ctx.globalAlpha = (s.alt < 0 ? 0.35 : 1) * dayDim;
     if (s.mag < 1.5) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8; }
     ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
     ctx.shadowBlur = 0;
@@ -923,8 +966,8 @@ function renderNearPanel() {
     const trend = rr == null ? '' : rr < 0 ? `<span class="up">▼ ${Math.abs(rr).toFixed(1)}</span>` : `<span class="down">▲ ${rr.toFixed(1)}</span>`;
     return `<li data-i="${i}" class="${s === state.target ? 'sel' : ''}">
       <span class="rank">${i + 1}</span>
-      <span class="nm"><b>${escapeHtml(satName(s.name))}</b><span>${Math.round(s.height)} km up · ${s.alt > 0 ? `${s.alt.toFixed(0)}° ${cardinal(s.az)}` : 'below horizon'}${s.sunlit ? ' · sunlit' : ''}</span></span>
-      <span class="dist"><b>${Math.round(s.range).toLocaleString()} km</b>${trend ? `<span>${trend} km/s</span>` : ''}</span></li>`;
+      <span class="nm"><b>${escapeHtml(satName(s.name))}</b><span>${s.alt > 0 ? `${s.alt.toFixed(0)}° ${cardinal(s.az)}` : 'below horizon'}${s.sunlit ? ' · ☀' : ''}</span></span>
+      <span class="dist"><b>${Math.round(s.range).toLocaleString()} km</b>${trend ? `<span>${trend}</span>` : ''}</span></li>`;
   }).join('') || '<li class="muted">Loading satellites…</li>';
   $('nearList').onclick = (ev) => {
     const li = ev.target.closest('li[data-i]');
@@ -1183,6 +1226,8 @@ function hud(date, now) {
     state.calHinted = true;
     toast(`Compass accuracy is poor${acc > 0 ? ` (±${Math.round(acc)}°)` : ''}. Move your phone in a figure-8, away from metal and magnets, or tap Align on a bright object.`, 7000);
   }
+  const provisional = state.mode === 'ar' && orient.mode === 'sensor' && orient.status === 'north provisional';
+  $('northNote').classList.toggle('hidden', !provisional || !!state.northNoteClosed);
   $('sub').textContent = `Alt ${pt.alt.toFixed(0)}° · ${src}${orient.yawOffset ? ` · cal ${orient.yawOffset > 0 ? '+' : ''}${orient.yawOffset.toFixed(1)}°` : ''}`;
   $('clock').textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   drawTape(pt.az);
@@ -1195,7 +1240,7 @@ function hud(date, now) {
       updateTop10();
       renderNearPanel();
       const c = state.top10[0];
-      $('liveText').textContent = c ? `NEAREST 10 · closest: ${satName(c.name)} ${fmtDist(c)}` : 'Finding the nearest satellites…';
+      $('liveText').textContent = c ? `NEAR 10 · #1 ${satName(c.name)} · ${fmtDist(c)}` : 'Finding the nearest satellites…';
     } else {
       const up = sat.near.filter((s) => s.alt > 0);
       const starlink = up.filter((s) => s.type === 'Starlink satellite').length;
@@ -1380,11 +1425,6 @@ function bindUI() {
   $('tInfo').onclick = () => state.target && openDetails(state.target);
   $('setClose').onclick = () => $('settings').classList.add('hidden');
   $('tClose').onclick = () => selectTarget(null);
-  $('tMore').onclick = () => {
-    const d = $('tDetails');
-    d.classList.toggle('collapsed');
-    $('tMore').textContent = d.classList.contains('collapsed') ? '▾' : '▴';
-  };
   $('tGoto').onclick = () => state.target && centerOn(state.target);
   $('tAlign').onclick = () => alignOn(state.target);
   $('btnCal').onclick = () => {
@@ -1404,6 +1444,7 @@ function bindUI() {
   $('camRetry').onclick = () => startAR(true);
   $('darkBoost').onclick = () => { $('darkHint').classList.add('hidden'); camctl.applyPreset('night'); toast('Night camera on. Rest the phone on something steady for the best picture.'); };
   $('darkClose').onclick = () => $('darkHint').classList.add('hidden');
+  $('northClose').onclick = () => { state.northNoteClosed = true; $('northNote').classList.add('hidden'); };
   $('iosHintClose').onclick = () => { $('iosHint').classList.add('hidden'); save('iosHintDone', true); };
   $('installBtn').onclick = async () => {
     $('installHint').classList.add('hidden');

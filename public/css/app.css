@@ -309,3 +309,100 @@ body.has-target #nearPanel { display: none; }
 #installHint img { width: 38px; height: 38px; border-radius: 10px; flex: none; }
 #installHint > div { flex: 1; line-height: 1.35; }
 #installBtn { flex: none; border: 0; background: var(--accent); color: #fff; font-weight: 650; padding: 8px 12px; border-radius: 10px; }
+
+/* =====================================================================
+   Layout system (overrides earlier one-off positions)
+   ===================================================================== */
+/* Status line under the heading never overflows into the right side. */
+.hud-heading { min-width: 0; flex: 1; padding-right: 10px; }
+.hud-sub { overflow: hidden; text-overflow: ellipsis; }
+
+/* Right-hand column: always between the top bar and the toolbar. */
+#rightCol { position: fixed; z-index: 2; right: calc(env(safe-area-inset-right) + 12px);
+  top: calc(env(safe-area-inset-top) + 150px); bottom: calc(env(safe-area-inset-bottom) + 88px);
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; pointer-events: none; }
+#rightCol > * { pointer-events: auto; }
+#rightCol #btnNear, #rightCol #camBtn, #rightCol #zoomCtl { position: static; transform: none; top: auto; right: auto; }
+body:not(.app-on) #rightCol { display: none; }
+
+/* Notices: one stack under the top bar, clear of the right column, behind cards and sheets. */
+#notices { position: fixed; z-index: 2; top: calc(env(safe-area-inset-top) + 150px); left: calc(env(safe-area-inset-left) + 12px);
+  right: calc(env(safe-area-inset-right) + 74px); max-width: 440px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+#notices > * { pointer-events: auto; position: static !important; transform: none !important; width: auto !important; top: auto !important; left: auto !important; }
+#notices > .pill-btn { align-self: flex-start; }
+#darkHint, #northNote { display: flex; gap: 10px; align-items: center; padding: 9px 10px 9px 12px; border-radius: 14px;
+  background: var(--glass-strong); border: 1px solid rgba(126,240,207,.35); font-size: 13px; line-height: 1.35; }
+#darkHint span, #northNote span { flex: 1; min-width: 0; }
+#northNote { border-color: rgba(255,181,71,.4); }
+
+/* Cards sit above notices; sheets above everything. */
+.card { z-index: 3; }
+#nearPanel { z-index: 2; }
+
+/* Phones in landscape: shorter top bar, compact controls. */
+@media (max-height: 520px) {
+  #rightCol { top: calc(env(safe-area-inset-top) + 112px); bottom: calc(env(safe-area-inset-bottom) + 10px); gap: 6px; }
+  #rightCol #btnNear, #rightCol #camBtn { width: 44px; height: 46px; font-size: 9.5px; }
+  #rightCol #zoomCtl button { width: 44px; height: 38px; }
+  #rightCol #zoomCtl #zoomVal { height: 28px; }
+  #notices { top: calc(env(safe-area-inset-top) + 112px); }
+  #hud { padding-bottom: 8px; gap: 3px; }
+  #tape { height: 28px; }
+  .card { bottom: calc(env(safe-area-inset-bottom) + 76px); max-height: calc(100dvh - 190px); overflow-y: auto; }
+  #nearPanel { max-height: calc(100dvh - 200px); bottom: calc(env(safe-area-inset-bottom) + 76px); }
+}
+
+/* ---------- Layout manager driven positions ---------- */
+#rightCol { top: calc(var(--hud-bottom, 150px) + 8px); bottom: var(--bottom-block, 88px); }
+#notices { top: calc(var(--hud-bottom, 150px) + 8px); }
+#notices > :not(.hidden) ~ :not(.hidden) ~ :not(.hidden) { display: none; } /* at most two at once */
+#rightCol.tight { gap: 6px; }
+#rightCol.tight #btnNear, #rightCol.tight #camBtn { width: 44px; height: 44px; }
+#rightCol.tight #btnNear span, #rightCol.tight #camBtn span { display: none; }
+#rightCol.tight #zoomCtl button { height: 38px; }
+#rightCol.tight #zoomCtl #zoomVal { height: 28px; }
+#rightCol.tiny #camBtn { display: none; }
+#rightCol.micro #zoomCtl { display: none; }
+.card { max-height: calc(100dvh - var(--hud-bottom, 150px) - 100px); overflow-y: auto; }
+#toast { top: calc(var(--hud-bottom, 118px) + 6px); }
+#reticle { max-width: calc(100vw - 160px); white-space: normal; line-height: 1.35; }
+#nearPanel { max-height: calc(50dvh - 120px); min-height: 0; }
+#nearList .nm span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tName { font-size: clamp(15px, 4.6vw, 18px); }
+
+/* Short phones (e.g. iPhone SE): compact start screen. */
+@media (max-height: 700px) {
+  .logo { width: 64px; height: 64px; }
+  .splash-inner { gap: 10px; }
+  .splash-inner h1 { font-size: 30px; }
+  .lead { font-size: 15px; }
+  .feats { display: none; }
+}
+
+/* Phones in landscape: card + Near panel bottom-left, toolbar bottom-right, crosshair clear. */
+@media (max-height: 520px) and (orientation: landscape) {
+  .card { left: calc(env(safe-area-inset-left) + 12px); transform: none; width: min(380px, 42vw); bottom: calc(env(safe-area-inset-bottom) + 10px);
+    max-height: calc(100dvh - var(--hud-bottom, 112px) - 20px); }
+  #nearPanel { left: calc(env(safe-area-inset-left) + 12px); width: min(380px, 42vw); bottom: calc(env(safe-area-inset-bottom) + 10px);
+    max-height: calc(100dvh - var(--hud-bottom, 112px) - 20px); }
+  #toolbar { left: auto; right: calc(env(safe-area-inset-right) + 70px); transform: none; bottom: calc(env(safe-area-inset-bottom) + 10px); }
+  #notices { right: auto; width: min(380px, 42vw); }
+  #notices > :not(.hidden) ~ :not(.hidden) { display: none; } /* one at a time */
+  body.has-target #notices, body.focus #notices { display: none; }
+}
+
+@media (max-height: 700px) { #notices > :not(.hidden) ~ :not(.hidden) { display: none; } } /* one notice at a time */
+
+#rightCol { top: var(--col-top, 158px); }
+#tName { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+/* Landscape: the space beside the crosshair is free, below it is not. */
+@media (max-height: 520px) and (orientation: landscape) {
+  #reticle { top: 50%; left: calc(50% + 34px); transform: translateY(-50%); max-width: calc(50vw - 110px); text-align: left; }
+}
+
+/* Pop-up messages live in the notice stack (first), above panels when one is open. */
+#notices { z-index: 5; }
+#notices > #toast { position: static !important; transform: none !important; text-align: left; max-width: none; box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+body.sheet-open #notices > :not(#toast) { display: none; }
+body:not(.app-on) #notices > :not(#toast) { display: none; }
+@media (max-height: 620px) { #tName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .card { padding: 10px 12px; } .guide { margin-top: 6px; font-size: 16px; } }
