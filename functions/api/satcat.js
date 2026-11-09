@@ -2,10 +2,11 @@
 // Proxied (no CORS upstream), cached 1 day with a 30-day stale backup.
 import { cachedFetch } from '../_lib/cached.js';
 
-export async function onRequestGet({ request, waitUntil }) {
+export async function onRequestGet({ request, env, waitUntil }) {
   const id = new URL(request.url).searchParams.get('id') || '';
   if (!/^\d{1,9}$/.test(id)) return new Response('bad id', { status: 400 });
   return cachedFetch({
+    env,
     key: `satcat/${id}`,
     ttl: 86400,
     staleTtl: 30 * 86400,

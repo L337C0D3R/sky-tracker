@@ -1,3 +1,9 @@
 name = "sky-tracker"
 pages_build_output_dir = "public"
 compatibility_date = "2026-10-01"
+
+# Global store for API data: one CelesTrak/JPL download per data set per refresh period
+# worldwide, and a backup that survives upstream outages or rate limits.
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "23751681351c45d5805919b871665a47"

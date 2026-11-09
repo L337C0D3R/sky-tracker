@@ -128,7 +128,7 @@ export class Sky {
       if (seen.has(norad)) continue;
       seen.add(norad);
       const satrec = S.twoline2satrec(l1, l2);
-      const name = n.trim();
+      const name = n.trim().replace(/^0 /, '');
       const epoch = new Date((satrec.jdsatepoch - 2440587.5) * 86400000);
       const prev = old.get(norad);
       if (prev) { // keep the same object (it may be the selected target), swap in the fresh orbit

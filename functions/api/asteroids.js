@@ -3,9 +3,10 @@
 import { fetchAll } from '../_lib/horizons.js';
 import { cachedFetch } from '../_lib/cached.js';
 
-export async function onRequestGet({ waitUntil }) {
+export async function onRequestGet({ env, waitUntil }) {
   const day = new Date().toISOString().slice(0, 10);
   return cachedFetch({
+    env,
     key: `asteroids/${day}`,
     ttl: 43200,
     staleTtl: 7 * 86400,
