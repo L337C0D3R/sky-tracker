@@ -1,0 +1,11 @@
+name = "sky-tracker-refresher"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+[triggers]
+crons = ["17 */2 * * *"]
+
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "23751681351c45d5805919b871665a47"

@@ -42,6 +42,7 @@ Static site in `public/` plus Cloudflare Pages Functions in `functions/api/`:
 | `/api/tle?group=stations` | CelesTrak TLE proxy (adds CORS), edge-cached 2 h |
 | `/api/asteroids` | JPL Horizons osculating elements for today, edge-cached 12 h |
 | `/api/satcat?id=25544` | CelesTrak SATCAT record (owner, launch, size), edge-cached 1 day |
+| (all of the above) | Two-level cache: edge cache + a global KV copy; served from backup if CelesTrak/JPL fail or rate-limit |
 | `/api/whereami` | Approximate location from Cloudflare's IP geolocation, used until GPS responds |
 
 ## Develop
@@ -54,3 +55,6 @@ Camera and sensors need HTTPS (or localhost).
 
 ## Deploy
 Deploy manually with `npm run deploy` (needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`). The repository already has those two secrets for a GitHub Actions deploy workflow.
+
+## Satellite data refresher
+`refresher/` is a small scheduled Cloudflare Worker (cron `17 */2 * * *`) that downloads each satellite group from CelesTrak once every 2 hours and stores it in the `sky-tracker-cache` KV namespace that the site's `/api/tle` reads. Visitors are served from KV, and CelesTrak receives one request per group per 2 hours, as its usage policy asks. Deploy it with `cd refresher && npx wrangler deploy`.
