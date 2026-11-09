@@ -18,6 +18,7 @@ Point your phone at the sky and get guided to planets, stars, satellites and ast
   - home-screen app support (icons, full screen, safe areas, install hint)
   - the iOS share sheet with deep links (`?t=25544`), and "Add to Calendar" for satellite passes with a 10-minute alert
   - red night-vision mode
+- **True north**: compass readings are corrected for magnetic declination using the World Magnetic Model 2025 (bundled from the MIT-licensed `geomagnetism` package).
 - **Sky map mode** for desktop or phones without motion sensors: drag, pinch or scroll to look around.
 - **Planets, Sun, Moon and Pluto** from [Astronomy Engine](https://github.com/cosinekitty/astronomy) (VSOP87/ELP, about ±1″), with rise and set times.
 - **Asteroids** (Ceres, Vesta, Pallas, Apophis, Bennu, Eros…) propagated from *today's* osculating elements from NASA/JPL Horizons, with light-time and parallax corrections. Checked against Horizons to within about 0.005°.

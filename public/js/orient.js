@@ -79,6 +79,7 @@ export class Orientation {
     this.mode = 'manual'; // 'sensor' | 'manual'
     this.view = { az: 180, alt: 35 };
     this.yawOffset = load('yawOffset', 0); // user calibration (Align), degrees
+    this.declination = 0; // magnetic -> true north (WMM), degrees east-positive
     this.raw = null; // latest sensor axes {X,Y,Z} in ENU, north-corrected
     this.basis = null; // smoothed camera basis {right, up, fwd}
     this.absolute = false;
@@ -214,7 +215,9 @@ export class Orientation {
     let right = [c * X[0] - s * Y[0], c * X[1] - s * Y[1], c * X[2] - s * Y[2]];
     let up = [s * X[0] + c * Y[0], s * X[1] + c * Y[1], s * X[2] + c * Y[2]];
     let fwd = [-Z[0], -Z[1], -Z[2]];
-    if (this.yawOffset) { right = yawVec(right, this.yawOffset); up = yawVec(up, this.yawOffset); fwd = yawVec(fwd, this.yawOffset); }
+    // Compasses measure magnetic north; the sky is laid out on true north.
+    const yaw = this.yawOffset + (this.absolute ? this.declination : 0);
+    if (yaw) { right = yawVec(right, yaw); up = yawVec(up, yaw); fwd = yawVec(fwd, yaw); }
     return { right, up, fwd };
   }
 
@@ -251,10 +254,23 @@ export class Orientation {
     return this.basis;
   }
 
-  // Where the centre of the screen points.
+  // Where the centre of the screen points. The azimuth of a camera aimed straight
+  // down/up is undefined, so the heading blends towards the phone's top edge
+  // (looking down: same as a flat compass app) or bottom edge (looking up).
+  // Both point the same way as the camera's horizontal direction, so it's seamless.
   pointing() {
     const f = this.basis?.fwd || [0, 1, 0];
-    return { az: wrap360(Math.atan2(f[0], f[1]) * R2D), alt: Math.asin(Math.max(-1, Math.min(1, f[2]))) * R2D };
+    const u = this.basis?.up || [0, 0, 1];
+    const alt = Math.asin(Math.max(-1, Math.min(1, f[2]))) * R2D;
+    const sgn = f[2] < 0 ? 1 : -1;
+    // Unit horizontal directions of the camera and of the relevant phone edge.
+    const fl = Math.hypot(f[0], f[1]) || 1e-9, ul = Math.hypot(u[0], u[1]) || 1e-9;
+    const fd = [f[0] / fl, f[1] / fl], ud = [(sgn * u[0]) / ul, (sgn * u[1]) / ul];
+    // Camera direction below 60° of tilt, phone edge beyond 80°, smooth in between.
+    const t = Math.min(1, Math.max(0, (Math.abs(alt) - 60) / 20));
+    const k = t * t * (3 - 2 * t);
+    const hx = fd[0] * (1 - k) + ud[0] * k, hy = fd[1] * (1 - k) + ud[1] * k;
+    return { az: wrap360(Math.atan2(hx, hy) * R2D), alt };
   }
 
   calibrateTo(az) {

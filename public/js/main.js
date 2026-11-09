@@ -2,6 +2,7 @@ import { Sky, enu } from './sky.js';
 import { Orientation, wrap180, dot, load, save } from './orient.js';
 import { initDetails, openDetails, closeDetails, liveTick, currentObject, isOpen as detailsOpen } from './details.js';
 import * as camctl from './camctl.js';
+import { declination } from '../vendor/wmm.js';
 
 const $ = (id) => document.getElementById(id);
 const D2R = Math.PI / 180;
@@ -173,6 +174,7 @@ async function init() {
 
 function setLocation(lat, lon, elev, label) {
   state.locSource = label;
+  try { orient.declination = declination(lat, lon, new Date()); } catch { orient.declination = 0; }
   sky.setLocation(lat, lon, elev);
   state.located = true;
   state.locLabel = label;
@@ -950,7 +952,8 @@ function updateLocInfo() {
     src = `From your phone’s GPS, accurate to ±${g.acc < 1000 ? `${Math.round(g.acc)} m` : `${(g.acc / 1000).toFixed(1)} km`}, updated ${age}s ago.`;
     if (g.acc > 1000) src += ' This is approximate. Turn on Precise Location for this browser.';
   } else src = `Source: ${state.locSource || 'unknown'}. Tap “Use GPS” for your exact position.`;
-  $('locInfo').textContent = `${o.latitude.toFixed(5)}°, ${o.longitude.toFixed(5)}° · ${src}`;
+  const dec = orient.declination;
+  $('locInfo').textContent = `${o.latitude.toFixed(5)}°, ${o.longitude.toFixed(5)}° · ${src} Compass corrected to true north (magnetic declination here: ${dec >= 0 ? '+' : ''}${dec.toFixed(1)}°, World Magnetic Model 2025).`;
   const ll = `${o.latitude.toFixed(6)},${o.longitude.toFixed(6)}`;
   $('locMap').href = IS_IOS ? `https://maps.apple.com/?ll=${ll}&q=${encodeURIComponent('SkyTracker position')}` : `https://www.google.com/maps/search/?api=1&query=${ll}`;
 }
