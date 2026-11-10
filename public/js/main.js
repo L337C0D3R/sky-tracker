@@ -170,6 +170,7 @@ async function init() {
     consName: (id) => consNames[id] || id,
     onGuide: (o) => selectTarget(o, true),
     onShare: shareObject,
+    onTrack: (o) => startTrack(o),
     linkFor,
     isIOS: IS_IOS,
     isAndroid: IS_ANDROID,
@@ -444,6 +445,7 @@ function enter(mode) {
   $('yawVal').textContent = `${orient.yawOffset.toFixed(1)}°`;
   if (state.target) selectTarget(state.target, false);
   maybeShowInstallHint();
+  if (state.track) updateTrackUi();
 }
 
 // ---------------- Zoom ----------------
@@ -550,6 +552,19 @@ function layoutVars(now) {
   }
   rs.setProperty('--col-top', `${top + 8}px`);
   const avail = innerHeight - block - (top + 8);
+  // Mini sky map (Track mode): top-left, as big as fits without reaching the crosshair or
+  // any bottom panel on the left side.
+  if (state.track) {
+    let leftBlock = 88;
+    for (const id of ['toolbar', 'target', 'nearPanel']) {
+      const r = vis($(id));
+      if (r && r.left < 160) leftBlock = Math.max(leftBlock, Math.round(innerHeight - r.top + 8));
+    }
+    const vAvail = innerHeight - leftBlock - (hudBottom + 8) - 18;
+    const size = Math.floor(Math.min(150, innerWidth / 2 - 56, vAvail));
+    rs.setProperty('--radar-size', `${Math.max(0, size)}px`);
+    $('radarWrap').classList.toggle('no-room', size < 76);
+  }
   const col = $('rightCol');
   // Full size needs ~290 px; compact ~210; without Night ~160; without zoom just Near 10.
   col.classList.toggle('tight', avail < 290);
@@ -634,6 +649,7 @@ function draw(now) {
 
   drawGround(ar);
   if (state.nearest) { drawNearest(zs); drawTarget(now); return; }
+  if (state.track) { drawTrackView(zs, ar); drawTarget(now); return; }
   if (state.layers.grid) drawGrid();
   if (state.layers.constellations) drawConstellations(ar);
 
@@ -932,6 +948,214 @@ function crosshairReadout() {
 
 }
 
+// ---------------- Track mode: one object, its whole path, and a mini sky map ----------------
+function getFullPath(o) {
+  const now = Date.now();
+  const ttl = o.kind === 'satellite' ? 20000 : 300000;
+  const fp = o._full;
+  // Recompute periodically, and as soon as the pass/arc it shows is over.
+  if (!fp || now - o._fullAt > ttl || (fp.set && now > fp.set.getTime() + 5000)) {
+    o._full = sky.fullPath(o, new Date());
+    o._fullAt = now;
+  }
+  return o._full;
+}
+
+function startTrack(o) {
+  if (!o) return;
+  if (state.nearest) setNearest(false);
+  state.track = o;
+  state.follow = false;
+  selectTarget(o, false);
+  closeDetails();
+  for (const id of ['search', 'settings']) $(id).classList.add('hidden');
+  document.body.classList.add('tracking');
+  getFullPath(o);
+  updateTrackUi();
+  if (state.mode === 'map') fitPath();
+}
+
+function stopTrack() {
+  state.track = null;
+  state.follow = false;
+  document.body.classList.remove('tracking', 'radar-big');
+  updateTrackUi();
+}
+
+// Sky map: show the whole path at once (centre + zoom to fit).
+function fitPath() {
+  const fp = state.track && getFullPath(state.track);
+  if (!fp) return;
+  const up = fp.pts.filter((p) => p.alt >= 0);
+  if (!up.length) return;
+  let c = up.reduce((a, p) => [a[0] + p.e[0], a[1] + p.e[1], a[2] + p.e[2]], [0, 0, 0]);
+  const l = Math.hypot(...c) || 1;
+  c = c.map((v) => v / l);
+  const maxAng = Math.max(...up.map((p) => Math.acos(clamp(dot(p.e, c), -1, 1)) / D2R));
+  state.follow = false;
+  orient.mode = 'manual';
+  orient.view.az = ((Math.atan2(c[0], c[1]) / D2R) + 360) % 360;
+  orient.view.alt = clamp(Math.asin(c[2]) / D2R, -10, 89);
+  setZoom(clamp(70 / (2 * maxAng * 1.25 + 6), ZOOM.map[0], ZOOM.map[1]));
+  updateTrackUi();
+}
+
+function updateTrackUi() {
+  const t = state.track;
+  $('tTrack').classList.toggle('on', !!t);
+  $('tTrack').setAttribute('aria-pressed', t ? 'true' : 'false');
+  $('trackRow').classList.toggle('hidden', !t);
+  $('radarWrap').classList.toggle('hidden', !t);
+  const map = state.mode === 'map';
+  $('trFit').classList.toggle('hidden', !map);
+  $('trFollow').classList.toggle('hidden', !map);
+  $('trFollow').classList.toggle('on', !!state.follow);
+}
+
+const clock = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(x).padStart(2, '0')}`;
+};
+function trackStatusText() {
+  const t = state.track, fp = t && getFullPath(t);
+  if (!fp) return 'Not above your horizon in the next day';
+  const now = Date.now();
+  if (fp.circumpolar) return 'Never sets from here';
+  if (fp.rise && now < fp.rise.getTime()) return `Rises in ${clock(fp.rise - now)}`;
+  if (fp.set) return `Sets in ${clock(fp.set - now)}`;
+  return 'Above the horizon';
+}
+function updateTrackRow() {
+  const t = state.track, fp = t && getFullPath(t);
+  if (!t) return;
+  const f = (d) => (d ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: t.kind === 'satellite' ? '2-digit' : undefined }) : '—');
+  $('trStatus').textContent = trackStatusText();
+  $('trTimes').textContent = fp
+    ? [fp.rise ? `Rises ${f(fp.rise)}` : null, fp.peakAlt != null ? `highest ${fp.peakAlt.toFixed(0)}° at ${f(fp.peakT)}` : null, fp.set ? `sets ${f(fp.set)}` : null].filter(Boolean).join(' · ')
+    : '';
+}
+
+// One object only: horizon, faint stars for orientation, the object and its whole path.
+function drawTrackView(zs, ar) {
+  const t = state.track;
+  ctx.globalAlpha = 0.35;
+  for (const s of sky.stars) {
+    if (s.mag > 3.2) break;
+    const p = project(s.e);
+    if (!onScreen(p, 4)) continue;
+    ctx.fillStyle = bvColor(s.bv);
+    ctx.beginPath(); ctx.arc(p[0], p[1], Math.max(0.7, (4.2 - s.mag) * 0.45) * zs, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const fp = getFullPath(t);
+  if (fp) drawTrajectory(t, true, null, false, fp);
+  const p = project(t.e);
+  if (!onScreen(p, 30)) return;
+  const col = colorOf(t);
+  const r = t.kind === 'planet' && (t.name === 'Sun' || t.name === 'Moon') ? Math.max(10, state.f * Math.tan(0.265 * D2R)) : 5.5 * zs;
+  if (t.name === 'Moon') drawMoon(p, r, t.moonPhase);
+  else {
+    const lit = t.kind !== 'satellite' || t.sunlit;
+    ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = lit ? 18 : 4;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
+    ctx.shadowBlur = 0;
+    if (!lit) { ctx.fillStyle = '#04060d'; ctx.beginPath(); ctx.arc(p[0], p[1], r * 0.5, 0, 7); ctx.fill(); }
+  }
+  considerCenter(t, p, r);
+  pill(`${displayName(t)} · ${fmtDist(t, true)}`, p[0] + r + 7, p[1], col, 1, 12.5, true);
+}
+
+// ---- Mini sky map ("radar"): the whole sky as a disc. Centre = straight up, edge = horizon.
+// Camera mode: rotated so the direction you face is up. Sky map: north up.
+const radar = $('radar');
+const rctx = radar.getContext('2d');
+function drawRadar() {
+  const t = state.track;
+  if (!t || $('radarWrap').classList.contains('hidden')) return;
+  const size = radar.clientWidth;
+  if (!size) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2.5);
+  if (radar.width !== Math.round(size * dpr)) { radar.width = radar.height = Math.round(size * dpr); }
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  rctx.clearRect(0, 0, size, size);
+  const c = size / 2, R = size / 2 - 15;
+  const pt = orient.pointing();
+  const rot = state.mode === 'ar' && orient.mode === 'sensor' ? -pt.az : 0;
+  const xy = (az, alt) => {
+    const r = R * (90 - Math.max(alt, -14)) / 90, a = (az + rot) * D2R;
+    return [c + r * Math.sin(a), c - r * Math.cos(a)];
+  };
+  const azAlt = (e) => [((Math.atan2(e[0], e[1]) / D2R) + 360) % 360, Math.asin(clamp(e[2], -1, 1)) / D2R];
+  // disc (solid when enlarged)
+  rctx.fillStyle = document.body.classList.contains('radar-big') ? 'rgb(8,12,26)' : 'rgba(6,10,24,.82)';
+  rctx.beginPath(); rctx.arc(c, c, R + 13, 0, 7); rctx.fill();
+  rctx.strokeStyle = 'rgba(126,240,180,.75)'; rctx.lineWidth = 1.5;
+  rctx.beginPath(); rctx.arc(c, c, R, 0, 7); rctx.stroke();
+  rctx.strokeStyle = 'rgba(160,180,255,.18)'; rctx.lineWidth = 1;
+  for (const a of [30, 60]) { rctx.beginPath(); rctx.arc(c, c, R * (90 - a) / 90, 0, 7); rctx.stroke(); }
+  // compass letters
+  rctx.font = '700 10px Inter, sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
+  for (const [az, l] of [[0, 'N'], [90, 'E'], [180, 'S'], [270, 'W']]) {
+    const a = (az + rot) * D2R;
+    rctx.fillStyle = az === 0 ? '#ff8080' : '#c4f7d8';
+    rctx.fillText(l, c + (R + 7) * Math.sin(a), c - (R + 7) * Math.cos(a));
+  }
+  // what the camera / screen currently shows: project the screen border onto the sky
+  const B0 = orient.basis;
+  if (B0) {
+    const poly = [];
+    const W = state.W, H = state.H, f = state.f;
+    for (let i = 0; i < 24; i++) {
+      const u = i / 24, per = 2 * (W + H), d = u * per;
+      const sx = d < W ? d : d < W + H ? W : d < 2 * W + H ? W - (d - W - H) : 0;
+      const sy = d < W ? 0 : d < W + H ? d - W : d < 2 * W + H ? H : H - (d - 2 * W - H);
+      const x = (sx - W / 2) / f, y = -(sy - H / 2) / f;
+      const v = [0, 1, 2].map((k) => B0.fwd[k] + B0.right[k] * x + B0.up[k] * y);
+      const l = Math.hypot(...v);
+      poly.push(xy(...azAlt(v.map((q) => q / l))));
+    }
+    rctx.save();
+    rctx.beginPath(); rctx.arc(c, c, R + 13, 0, 7); rctx.clip();
+    rctx.fillStyle = 'rgba(255,255,255,.13)'; rctx.strokeStyle = 'rgba(255,255,255,.55)'; rctx.lineWidth = 1;
+    rctx.beginPath(); poly.forEach(([x, y], i) => (i ? rctx.lineTo(x, y) : rctx.moveTo(x, y))); rctx.closePath(); rctx.fill(); rctx.stroke();
+    rctx.restore();
+    const [caz, calt] = azAlt(B0.fwd);
+    const cp = xy(caz, calt);
+    rctx.strokeStyle = '#fff'; rctx.lineWidth = 1.2;
+    rctx.beginPath(); rctx.moveTo(cp[0] - 4, cp[1]); rctx.lineTo(cp[0] + 4, cp[1]); rctx.moveTo(cp[0], cp[1] - 4); rctx.lineTo(cp[0], cp[1] + 4); rctx.stroke();
+  }
+  // the object's path (above the horizon), sunlit solid / shadow dotted for satellites
+  const fp = getFullPath(t);
+  const col = colorOf(t);
+  if (fp) {
+    const sat = fp.kind === 'pass';
+    rctx.lineCap = 'round';
+    for (let i = 1; i < fp.pts.length; i++) {
+      const a = fp.pts[i - 1], b = fp.pts[i];
+      if (a.alt < 0 && b.alt < 0) continue;
+      const past = b.t.getTime() < Date.now();
+      rctx.strokeStyle = col; rctx.globalAlpha = past ? 0.45 : 1;
+      rctx.lineWidth = sat && !a.sunlit ? 2.4 : 1.8;
+      rctx.setLineDash(sat && !a.sunlit ? [0.1, 4] : []);
+      const p1 = xy(...azAlt(a.e)), p2 = xy(...azAlt(b.e));
+      rctx.beginPath(); rctx.moveTo(...p1); rctx.lineTo(...p2); rctx.stroke();
+    }
+    rctx.setLineDash([]); rctx.globalAlpha = 1;
+    const dotAt = (e, r, fill) => { const p = xy(...azAlt(e)); rctx.fillStyle = fill; rctx.beginPath(); rctx.arc(p[0], p[1], r, 0, 7); rctx.fill(); };
+    if (fp.rise) dotAt(fp.pts[0].e, 3, col);
+    if (fp.set) dotAt(fp.pts[fp.pts.length - 1].e, 3, col);
+    if (fp.peakE) dotAt(fp.peakE, 2.5, '#fff');
+  }
+  // the object now (pulsing)
+  const [oaz, oalt] = azAlt(t.e);
+  const op = xy(oaz, oalt);
+  const pulse = 4 + Math.sin(performance.now() / 220) * 1.5;
+  rctx.globalAlpha = oalt < 0 ? 0.5 : 1;
+  rctx.fillStyle = col; rctx.shadowColor = col; rctx.shadowBlur = 8;
+  rctx.beginPath(); rctx.arc(op[0], op[1], pulse, 0, 7); rctx.fill();
+  rctx.shadowBlur = 0; rctx.globalAlpha = 1;
+}
+
 // ---------------- Nearest 10 satellites ----------------
 function updateTop10() {
   // 10 smallest slant ranges among every tracked satellite (all ranges are refreshed ~3×/s).
@@ -945,6 +1169,7 @@ function updateTop10() {
 }
 
 function setNearest(on) {
+  if (on && state.track) stopTrack();
   state.nearest = on;
   document.body.classList.toggle('focus', on);
   $('btnNear').classList.toggle('on', on);
@@ -1059,9 +1284,10 @@ const hhmm = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit
 
 // Draws an object's path across your sky: past = solid & faded, future = dashed,
 // below-horizon parts dimmed; time ticks, rise/set labels and a direction arrow.
-function drawTrajectory(o, strong, colour = null, compact = false) {
-  const tr = getTraj(o);
-  if (tr.pts.length < 2) return;
+function drawTrajectory(o, strong, colour = null, compact = false, override = null) {
+  const tr = override || getTraj(o);
+  if (!tr || tr.pts.length < 2) return;
+  const isSat = tr.kind === 'sat' || tr.kind === 'pass';
   const col = colour || colorOf(o);
   const nowMs = Date.now();
   const maxJump = Math.max(state.W, state.H) * 1.5;
@@ -1077,7 +1303,7 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
     const below = pt.alt < 0 && pa.alt < 0;
     ctx.globalAlpha = (below ? 0.28 : 0.9) * (future ? 1 : 0.5) * (strong ? 1 : 0.85);
     ctx.lineWidth = strong ? 2.2 : 1.7;
-    if (tr.kind === 'sat') {
+    if (isSat) {
       // Satellites: solid while in sunlight (can be seen), dotted while in Earth's shadow.
       // A segment's state is its start point's; exact shadow edges are inserted as points.
       ctx.lineCap = 'round';
@@ -1093,22 +1319,37 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
   const canLabel = (p) => onScreen(p, -10) && labels.every((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) > 46);
   tr.pts.forEach((pt, i) => {
     const p = P[i];
-    if (!p) return;
+    if (!p || i === 0) return;
     const tms = pt.t.getTime();
-    let label = null;
+    // A tick wherever the path crosses a whole minute (satellites) or hour (others).
+    if (Math.floor(tms / tr.tick) === Math.floor(tr.pts[i - 1].t.getTime() / tr.tick)) return;
+    let label;
     if (tr.kind === 'sat') {
       const k = Math.round((tms - nowMs) / 60000);
-      if (i % 6 !== 0 || k === 0) return;
+      if (k === 0) return;
       label = `${k > 0 ? '+' : '−'}${Math.abs(k)} min`;
-    } else {
-      if (pt.t.getMinutes() !== 0) return;
-      label = hhmm(pt.t);
-    }
+    } else label = hhmm(pt.t);
     ctx.globalAlpha = pt.alt < 0 ? 0.35 : 0.95;
     ctx.fillStyle = col;
     ctx.beginPath(); ctx.arc(p[0], p[1], strong ? 3 : 2.5, 0, 7); ctx.fill();
     if ((!compact || strong) && canLabel(p)) { labels.push(p); text(label, p[0] + 6, p[1] - 6, col, 10.5, 600); }
   });
+
+  // Full paths (Track mode): rise, highest point and set, with exact times.
+  if (tr.kind === 'pass' || tr.kind === 'arc') {
+    const tsec = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: tr.kind === 'pass' ? '2-digit' : undefined });
+    const mark = (e, txt, dy) => {
+      const p = e && project(e);
+      if (!onScreen(p, -10)) return;
+      ctx.globalAlpha = 1; ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(p[0], p[1], 4.5, 0, 7); ctx.fill();
+      pill(txt, p[0] + 8, p[1] + dy, col, 0.95, 10.5, true);
+      labels.push(p);
+    };
+    if (tr.rise) mark(tr.pts[0].e, `Rises ${tsec(tr.rise)}`, -14);
+    if (tr.set) mark(tr.pts[tr.pts.length - 1].e, `Sets ${tsec(tr.set)}`, -14);
+    if (tr.peakE) mark(tr.peakE, `Highest ${tr.peakAlt.toFixed(0)}° · ${tsec(tr.peakT)}`, 14);
+  }
 
   // Rise / set where the path crosses the horizon
   for (let i = 1; i < tr.pts.length; i++) {
@@ -1127,7 +1368,7 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
   }
 
   // Satellites: mark where it enters / leaves Earth's shadow.
-  if (tr.kind === 'sat' && (strong || !compact)) {
+  if (isSat && (strong || !compact)) {
     for (let i = 0; i < tr.pts.length; i++) {
       const pt = tr.pts[i];
       if (!pt.edge) continue;
@@ -1147,7 +1388,7 @@ function drawTrajectory(o, strong, colour = null, compact = false) {
   // Direction-of-motion arrow just ahead of "now"
   const iNow = tr.pts.findIndex((pt) => pt.t.getTime() > nowMs);
   if (iNow > 0 && iNow + 1 < tr.pts.length) {
-    const a = project(o.e), b = P[Math.min(tr.pts.length - 1, iNow + (tr.kind === 'sat' ? 2 : 1))];
+    const a = project(o.e), b = P[Math.min(tr.pts.length - 1, iNow + (tr.kind === 'sat' ? 2 : tr.kind === 'pass' ? 3 : 1))];
     if (a && b && onScreen(a) && Math.hypot(b[0] - a[0], b[1] - a[1]) > 4) {
       const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
       const r = 16;
@@ -1257,10 +1498,17 @@ function hud(date, now) {
   drawTape(pt.az);
 
   liveTick(date);
+  if (state.track) {
+    if (state.follow && state.mode === 'map') { orient.view.az = state.track.az; orient.view.alt = clamp(state.track.alt, -10, 89); }
+    drawRadar();
+  }
   if (now - lastLive > 500) {
     lastLive = now;
     updateLocInfo();
-    if (state.nearest) {
+    if (state.track) {
+      updateTrackRow();
+      $('liveText').textContent = `TRACKING ${displayName(state.track)} · ${trackStatusText()}`;
+    } else if (state.nearest) {
       updateTop10();
       renderNearPanel();
       const c = state.top10[0];
@@ -1352,6 +1600,8 @@ function extraInfo(t, date) {
 }
 
 function selectTarget(o, center = true) {
+  if (!o && state.track) stopTrack();
+  if (o && state.track && o !== state.track) stopTrack();
   state.target = o;
   state.extraAt = -1e9;
   state.locked = false;
@@ -1447,6 +1697,16 @@ function bindUI() {
   };
   $('btnSettings').onclick = () => { $('search').classList.add('hidden'); closeDetails(); $('settings').classList.toggle('hidden'); };
   $('tInfo').onclick = () => state.target && openDetails(state.target);
+  $('tTrack').onclick = () => (state.track ? stopTrack() : startTrack(state.target));
+  $('trStop').onclick = () => stopTrack();
+  $('trFit').onclick = () => fitPath();
+  $('trFollow').onclick = () => { state.follow = !state.follow; if (state.follow) orient.mode = 'manual'; updateTrackUi(); };
+  $('radar').onclick = () => document.body.classList.toggle('radar-big');
+  $('trMap').onclick = () => document.body.classList.toggle('radar-big');
+  $('radarClose').onclick = (e) => { e.stopPropagation(); document.body.classList.remove('radar-big'); };
+  document.addEventListener('click', (e) => {
+    if (document.body.classList.contains('radar-big') && !e.target.closest('#radarWrap, #trMap')) document.body.classList.remove('radar-big');
+  });
   $('setClose').onclick = () => $('settings').classList.add('hidden');
   $('tClose').onclick = () => selectTarget(null);
   $('tGoto').onclick = () => state.target && centerOn(state.target);
@@ -1551,6 +1811,7 @@ function bindUI() {
     }
     if (!dragStart || orient.mode !== 'manual') return;
     const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+    if (state.follow && Math.hypot(dx, dy) > 6) { state.follow = false; updateTrackUi(); }
     if (Math.hypot(dx, dy) > 6) moved = true;
     const degPerPx = 1 / (state.f * D2R);
     orient.view.az = (dragStart.az - dx * degPerPx + 360) % 360;

@@ -174,6 +174,7 @@ export function initDetails(d) {
   $('dClose').onclick = closeDetails;
   $('dGuide').onclick = () => { const o = current; closeDetails(); deps.onGuide?.(o); };
   $('dShare').onclick = () => current && deps.onShare?.(current);
+  $('dTrack').onclick = () => { const o = current; closeDetails(); deps.onTrack?.(o); };
 }
 
 export function isOpen() { return !$('details').classList.contains('hidden'); }

@@ -30,15 +30,16 @@ export function enu(az, alt) {
 
 // Saemundsson/Bennett-style refraction in degrees for a true altitude.
 // Atmospheric refraction (degrees) for a TRUE altitude, Saemundsson's formula
-// (standard 10 °C, 1010 hPa). Used for every object so stars, planets and asteroids
-// are consistent. Light from below the horizon never reaches you, so it fades
-// smoothly to zero between 0° and −2° instead of jumping.
-const REFR0 = 1.02 / 60 / Math.tan((10.3 / 5.11) * Math.PI / 180);
+// (standard 10 °C, 1010 hPa), used for every object so all are consistent.
+// Valid (and physical) down to about 1° below the horizon, which is what makes objects
+// rise/set at the standard moment; below that it fades smoothly to zero by −3°.
+const saem = (h) => 1.02 / 60 / Math.tan((h + 10.3 / (h + 5.11)) * Math.PI / 180);
+const REFR_M1 = saem(-1);
 let refrScale = 1; // air pressure relative to sea level (thinner air bends light less)
 export function refraction(alt) {
-  if (alt >= 0) return refrScale * 1.02 / 60 / Math.tan((alt + 10.3 / (alt + 5.11)) * D2R);
-  if (alt <= -2) return 0;
-  return refrScale * REFR0 * (1 + alt / 2);
+  if (alt >= -1) return refrScale * saem(alt);
+  if (alt <= -3) return 0;
+  return refrScale * REFR_M1 * (alt + 3) / 2;
 }
 
 export class Sky {
@@ -354,6 +355,85 @@ export class Sky {
       pts.push({ t: d, e: enu(az, alt), alt });
     }
     return { pts, tick: 3600000, kind: 'day' };
+  }
+
+  // Position of any object at an arbitrary time (refracted az/alt, ENU vector).
+  _posAt(o, d) {
+    const t = A.MakeTime(d);
+    if (o.kind === 'satellite') {
+      const tmp = { satrec: o.satrec };
+      this.updateFast(d, [tmp]);
+      return tmp.dead ? null : { az: tmp.az, alt: tmp.alt, e: tmp.e, sunlit: tmp.sunlit };
+    }
+    if (o.kind === 'planet') { const h = this._planet(o.body, t); return { az: h.az, alt: h.alt, e: h.e }; }
+    if (o.kind === 'star') { const tmp = { v: o.v }; this._star(tmp, A.Rotation_EQJ_HOR(t, this.observer)); return { az: tmp.az, alt: tmp.alt, e: tmp.e }; }
+    if (o.kind === 'asteroid') {
+      const tmp = { el: o.el };
+      this._asteroid(tmp, t, A.HelioVector(A.Body.Earth, t), A.ObserverVector(t, this.observer, false), A.Rotation_EQJ_HOR(t, this.observer));
+      return { az: tmp.az, alt: tmp.alt, e: tmp.e };
+    }
+    return null;
+  }
+
+  // Time (ms) where the object crosses the horizon (apparent altitude 0) between a and b.
+  _horizonCross(o, a, b) {
+    const up = (ms) => (this._posAt(o, new Date(ms))?.alt ?? -90) > 0;
+    const ua = up(a);
+    for (let i = 0; i < 40 && Math.abs(b - a) > 250; i++) { const m = (a + b) / 2; if (up(m) === ua) a = m; else b = m; }
+    return (a + b) / 2;
+  }
+
+  // The object's whole visit to your sky: the current or next pass for a satellite, the
+  // rise → set arc for everything else (or ±12 h when it never sets / never rises).
+  // Points carry time, ENU vector, altitude; satellites also sunlit state + exact shadow edges.
+  fullPath(o, date) {
+    const now = date.getTime();
+    const sat = o.kind === 'satellite';
+    const step = sat ? 10000 : 600000; // 10 s or 10 min search steps
+    const span = sat ? 45 * 60000 : 26 * 3600000;
+    const alt = (ms) => this._posAt(o, new Date(ms))?.alt ?? -90;
+    let start = null, end = null;
+    if (alt(now) > 0) {
+      for (let ms = now; ms > now - span; ms -= step) if (alt(ms - step) <= 0) { start = this._horizonCross(o, ms - step, ms); break; }
+      for (let ms = now; ms < now + span; ms += step) if (alt(ms + step) <= 0) { end = this._horizonCross(o, ms, ms + step); break; }
+    } else {
+      const look = sat ? 36 * 3600000 : 26 * 3600000;
+      for (let ms = now; ms < now + look; ms += step) if (alt(ms + step) > 0) { start = this._horizonCross(o, ms, ms + step); break; }
+      if (start != null) for (let ms = start + step / 4; ms < start + span; ms += step) if (alt(ms + step) <= 0) { end = this._horizonCross(o, ms, ms + step); break; }
+    }
+    const circumpolar = start == null && end == null && alt(now) > 0;
+    if (start == null && end == null && !circumpolar) return null; // doesn't rise in the search window
+    const s0 = start ?? now - 12 * 3600000, e0 = end ?? now + 12 * 3600000;
+    const n = sat ? Math.min(400, Math.max(40, Math.round((e0 - s0) / 5000))) : 150;
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const ms = s0 + ((e0 - s0) * i) / n;
+      const p = this._posAt(o, new Date(ms));
+      if (!p) continue;
+      const pt = { t: new Date(ms), e: p.e, alt: i === 0 && start != null ? 0 : i === n && end != null ? 0 : p.alt, sunlit: p.sunlit };
+      const prev = pts[pts.length - 1];
+      if (sat && prev && prev.sunlit !== pt.sunlit) {
+        const edge = this._shadowEdge(o, prev.t.getTime(), ms);
+        const b = this._posAt(o, new Date(edge));
+        if (b) pts.push({ t: new Date(edge), e: b.e, alt: b.alt, sunlit: pt.sunlit, edge: pt.sunlit ? 'exit' : 'enter' });
+      }
+      pts.push(pt);
+    }
+    // Highest point (golden-section on the sampled maximum).
+    let iMax = 0;
+    pts.forEach((p, i) => { if (p.alt > pts[iMax].alt) iMax = i; });
+    let a = pts[Math.max(0, iMax - 1)].t.getTime(), b = pts[Math.min(pts.length - 1, iMax + 1)].t.getTime();
+    const g = (Math.sqrt(5) - 1) / 2;
+    for (let i = 0; i < 40 && b - a > 200; i++) {
+      const c = b - g * (b - a), d = a + g * (b - a);
+      if (alt(c) > alt(d)) b = d; else a = c;
+    }
+    const peakT = new Date((a + b) / 2), peak = this._posAt(o, peakT);
+    return {
+      kind: sat ? 'pass' : 'arc', tick: sat ? 60000 : 3600000, pts,
+      rise: start != null ? new Date(start) : null, set: end != null ? new Date(end) : null,
+      peakT, peakAlt: peak?.alt, peakAz: peak?.az, peakE: peak?.e, circumpolar,
+    };
   }
 
   // ---------- Details ----------

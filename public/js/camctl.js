@@ -15,7 +15,7 @@ const zoom = { want: 1, applied: 1 };
 let busy = false, queued = false, lastReadout = 0, stackFresh = true;
 let hwTouched = false; // only call applyConstraints once the user (or a preset) changed something
 // Health monitoring
-let lastTime = -1, lastProgress = 0, luma = null, darkCount = 0, stallFired = 0, stallStep = 0;
+let lastTime = -1, lastProgress = 0, luma = null, darkCount = 0, stallFired = 0, stallStep = 0, lastLuma = 0, lumaSamples = 0;
 const lumaCanvas = document.createElement('canvas');
 lumaCanvas.width = lumaCanvas.height = 24;
 const lumaCtx = lumaCanvas.getContext('2d', { willReadFrequently: true });
@@ -188,7 +188,13 @@ function health(now) {
       video.play().catch(() => {});
     } else onStall?.();
   }
-  if (video.videoWidth && video.readyState >= 2) {
+  // Picture brightness: copying a video frame costs GPU→CPU work, so sample it every second
+  // only until the "dark picture" decision is made (or while the Night panel is open), then
+  // every 10 s.
+  const panelOpen = !$('camSheet').classList.contains('hidden');
+  const due = panelOpen || darkCount < 4 && lumaSamples < 12 || now - lastLuma > 10000;
+  if (due && video.videoWidth && video.readyState >= 2) {
+    lastLuma = now; lumaSamples++;
     try {
       lumaCtx.drawImage(video, 0, 0, 24, 24);
       const d = lumaCtx.getImageData(0, 0, 24, 24).data;

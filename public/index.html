@@ -87,6 +87,12 @@
       <button id="installClose" class="icon" aria-label="Dismiss">✕</button>
     </div>
   </div>
+  <!-- Track mode: mini map of the whole sky (centre = overhead, edge = horizon) -->
+  <div id="radarWrap" class="hidden">
+    <canvas id="radar" aria-label="Sky map of the tracked object's path. Tap to enlarge."></canvas>
+    <span class="radar-hint">tap to enlarge</span>
+    <button id="radarClose" class="icon" aria-label="Close sky map">✕</button>
+  </div>
   <section id="nearPanel" class="hidden">
     <div id="nearHead"><span class="pulse"></span><b>10 nearest satellites</b><span class="muted small">live distance</span><button id="nearOff">Show all</button></div>
     <ol id="nearList"></ol>
@@ -112,11 +118,23 @@
         <div id="tName"></div>
         <div id="tType"></div>
       </div>
+      <button id="tTrack" class="track-btn" aria-label="Track this object" aria-pressed="false" title="Track: show only this object and its whole path">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><path d="M5 19c3-6 9-12 15-14" stroke-dasharray="2 2.5"/></svg>
+      </button>
       <button id="tInfo" class="info-btn" aria-label="More information">Details</button>
       <button id="tClose" class="icon" aria-label="Clear target">✕</button>
     </div>
     <div id="tGuide" class="guide"></div>
     <div id="tQuick" class="quick"></div>
+    <div id="trackRow" class="hidden">
+      <div class="tr-line"><b id="trStatus"></b><span id="trTimes" class="muted"></span></div>
+      <div class="tr-btns">
+        <button id="trMap" class="ghost">Path map</button>
+        <button id="trFit" class="ghost">Fit path</button>
+        <button id="trFollow" class="ghost">Follow</button>
+        <button id="trStop" class="ghost">✕ Stop</button>
+      </div>
+    </div>
     <div id="tDetails" class="collapsed hidden">
       <div id="tStats" class="stats"></div>
       <div id="tExtra" class="extra"></div>
@@ -161,7 +179,9 @@
       <button id="dClose" class="icon" aria-label="Close">✕</button>
     </div>
     <div id="dBody" class="d-body"></div>
-    <div class="d-foot"><button id="dShare" class="share-btn" aria-label="Share">
+    <div class="d-foot"><button id="dTrack" class="share-btn" aria-label="Track" title="Track: only this object and its whole path">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><path d="M5 19c3-6 9-12 15-14" stroke-dasharray="2 2.5"/></svg></button>
+      <button id="dShare" class="share-btn" aria-label="Share">
       <svg viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1"/></svg></button>
       <button id="dGuide" class="primary">Guide me to it</button></div>
   </section>

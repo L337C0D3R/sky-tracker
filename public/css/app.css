@@ -406,3 +406,56 @@ body:not(.app-on) #rightCol { display: none; }
 body.sheet-open #notices > :not(#toast) { display: none; }
 body:not(.app-on) #notices > :not(#toast) { display: none; }
 @media (max-height: 620px) { #tName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .card { padding: 10px 12px; } .guide { margin-top: 6px; font-size: 16px; } }
+
+/* ---------- Track mode ---------- */
+.track-btn { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255,255,255,.06); display: grid; place-items: center; }
+.track-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.track-btn.on { background: var(--accent-2); color: #04211a; border-color: var(--accent-2); }
+#trackRow { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.tr-line { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font-size: 13px; }
+.tr-line b { color: var(--accent-2); font: 650 14px var(--display); }
+.tr-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.tr-btns .ghost { margin-top: 8px; padding: 6px 10px; }
+.tr-btns .ghost.on { background: rgba(126,240,207,.18); border-color: var(--accent-2); color: var(--accent-2); }
+body.tracking #notices > :not(#toast) { display: none; }
+#radarWrap { position: fixed; z-index: 2; left: calc(env(safe-area-inset-left) + 12px); top: calc(var(--hud-bottom, 150px) + 8px);
+  width: var(--radar-size, 120px); height: var(--radar-size, 120px); }
+#radarWrap.hidden, body:not(.tracking) #radarWrap, #radarWrap.no-room { display: none; }
+#radar { width: 100%; height: 100%; display: block; cursor: pointer; border-radius: 50%; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+.radar-hint { position: absolute; left: 0; right: 0; bottom: -15px; text-align: center; font-size: 9.5px; color: var(--muted); pointer-events: none; }
+body.radar-big #radarWrap { z-index: 6; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(92vw, calc(100dvh - 120px)); height: min(92vw, calc(100dvh - 120px)); }
+body.radar-big #radarWrap.no-room { display: block; }
+body.radar-big .radar-hint::after { content: ' · tap to close'; }
+/* Enlarged sky map: solid, over a dimmed screen */
+body.radar-big::before { content: ''; position: fixed; inset: 0; z-index: 5; background: rgba(2,4,10,.72); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+body.radar-big #radar { box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+/* Landscape: compact tracking card (title + status + buttons) */
+@media (max-height: 520px) and (orientation: landscape) {
+  body.tracking #tQuick, body.tracking #trTimes { display: none; }
+  body.tracking .guide { font-size: 15px; margin: 6px 0 0; }
+  body.tracking #trackRow { margin-top: 6px; padding-top: 6px; }
+}
+
+/* Compact tracking card: the mini map shows position, so the card only needs status + actions. */
+body.tracking #tQuick { display: none; }
+body.tracking .guide { margin: 6px 0 0; }
+#trackRow { margin-top: 6px; padding-top: 6px; }
+#trTimes { font-size: 12px; }
+.tr-btns { gap: 6px; }
+.tr-btns .ghost { margin-top: 6px; padding: 5px 10px; font-size: 12.5px; }
+#radarClose { display: none; position: absolute; top: -6px; right: -6px; width: 36px; height: 36px; background: var(--glass-strong); border: 1px solid var(--line); }
+body.radar-big #radarClose { display: grid; place-items: center; }
+body.radar-big .radar-hint { display: none; }
+/* Very short phones (iPhone SE): keep the crosshair clear. The crosshair must stay at the
+   exact screen centre (it is where the camera points), so the card and readout give way. */
+@media (max-height: 620px) and (orientation: portrait) {
+  #trTimes { display: none; }
+  .guide { font-size: 14.5px; }
+  .card { padding: 9px 12px; }
+  #reticle { top: calc(50% - 34px); transform: translate(-50%, -100%); }
+}
+@media (max-height: 620px) and (orientation: portrait) {
+  #reticle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100vw - 150px); }
+  #tType, #tQuick { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
